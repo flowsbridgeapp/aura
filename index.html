@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>P2P Мессенджер / Supabase</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="icon" href="data:,">
+    <!-- PWA метатеги -->
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#0066ff">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="P2P Messenger">
+    <link rel="apple-touch-icon" href="/icons/icon-192x192.png">
+    <!-- Регистрация Service Worker -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js')
+                    .then(registration => {
+                        console.log('Service Worker зарегистрирован:', registration);
+                    })
+                    .catch(error => {
+                        console.log('Ошибка регистрации Service Worker:', error);
+                    });
+            });
+        }
+    </script>
+</head>
+<body>
+    <div class="container">
+        <h1>📡 P2P Мессенджер (Supabase стратегия)</h1>
+        <div id="installPrompt" style="display: none; background: #0066ff; color: white; padding: 10px; border-radius: 8px; margin-bottom: 15px; text-align: center;">
+    📱 Установите приложение на телефон: 
+        <button id="installBtn" style="background: white; color: #0066ff; border: none; padding: 5px 15px; border-radius: 5px; margin-left: 10px;">Установить</button>
+        </div>
+
+        <div class="room-controls">
+            <input type="text" id="roomIdInput" placeholder="Имя комнаты" value="test-room">
+            <input type="text" id="peerNameInput" placeholder="Ваше имя" value="User_">
+            <button id="joinBtn">🚪 Присоединиться</button>
+            <button id="leaveBtn" disabled>🚪 Покинуть</button>
+        </div>
+
+        <div class="status-area">
+            <div id="connectionStatus">🔴 Не в сети</div>
+            <div id="peersList">👥 Пиры: нет</div>
+        </div>
+
+        <div class="main-area">
+            <div class="chat-area">
+                <h3>Чат</h3>
+                <div id="messages" class="messages-box"></div>
+                <div class="message-input-area">
+                    <input type="text" id="messageInput" placeholder="Сообщение..." disabled>
+                    <button id="sendMsgBtn" disabled>📤 Отправить</button>
+                </div>
+                <div class="file-input-area">
+                    <input type="file" id="fileInput" disabled>
+                    <button id="sendFileBtn" disabled>📎 Отправить файл</button>
+                </div>
+                <div id="fileProgress"></div>
+            </div>
+
+            <div class="video-area">
+                <h3>Видео-звонок</h3>
+                <div class="video-controls">
+                    <button id="startVideoBtn" disabled>🎥 Начать</button>
+                    <button id="stopVideoBtn" disabled>⏹️ Остановить</button>
+                </div>
+                <div class="videos-container">
+                    <div class="video-wrapper">
+                        <video id="localVideo" autoplay muted playsinline></video>
+                        <span>Вы</span>
+                    </div>
+                    <div id="remoteVideos" class="remote-videos"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "trystero/supabase": "https://unpkg.com/trystero@0.22.0/src/supabase.js",
+                "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.39.0"
+            }
+        }
+    </script>
+
+    <script type="module" src="script.js"></script>
+</body>
+</html>
