@@ -3,38 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>P2P Мессенджер / Supabase</title>
+    <title>NEXUS — P2P Мессенджер</title>
     <link rel="stylesheet" href="style.css">
     <link rel="icon" href="data:,">
-    <!-- PWA метатеги -->
+    
+    <!-- PWA метатеги (временно упрощено) -->
     <link rel="manifest" href="/manifest.json">
-    <meta name="theme-color" content="#0066ff">
-    <meta name="mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="P2P Messenger">
-    <link rel="apple-touch-icon" href="/icons/icon-192x192.png">
-    <!-- Регистрация Service Worker -->
-    <!-- <script>
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/sw.js')
-                    .then(registration => {
-                        console.log('Service Worker зарегистрирован:', registration);
-                    })
-                    .catch(error => {
-                        console.log('Ошибка регистрации Service Worker:', error);
-                    });
-            });
-        }
-    </script> -->
+    <meta name="theme-color" content="#00ffff">
 </head>
 <body>
     <div class="container">
-        <h1>📡 P2P Мессенджер (Supabase стратегия)</h1>
-        <div id="installPrompt" style="display: none; background: #0066ff; color: white; padding: 10px; border-radius: 8px; margin-bottom: 15px; text-align: center;">
-    📱 Установите приложение на телефон: 
-        <button id="installBtn" style="background: white; color: #0066ff; border: none; padding: 5px 15px; border-radius: 5px; margin-left: 10px;">Установить</button>
-        </div>
+        <h1>🌌 NEXUS P2P Мессенджер</h1>
 
         <div class="room-controls">
             <input type="text" id="roomIdInput" placeholder="Имя комнаты" value="test-room">
@@ -60,7 +39,6 @@
                     <input type="file" id="fileInput" disabled>
                     <button id="sendFileBtn" disabled>📎 Отправить файл</button>
                 </div>
-                <div id="fileProgress"></div>
             </div>
 
             <div class="video-area">
@@ -80,195 +58,163 @@
         </div>
     </div>
 
-    <script type="importmap">
-        {
-            "imports": {
-                "trystero/supabase": "https://unpkg.com/trystero@0.22.0/src/supabase.js",
-                "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.39.0"
-            }
+    <script type="module">
+        import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
+        const SUPABASE_URL = 'https://dlvlruldmaomehvcdofx.supabase.co';
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRsdmxydWxkbWFvbWVodmNkb2Z4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ0NzQyMDAsImV4cCI6MjA5MDA1MDIwMH0.pwEQNa_yVGAg2SsQn92qyeZlCqF__303eoFxKkNvufA';
+
+        const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+        let currentChannel = null;
+        let myPeerId = 'user-' + Math.random().toString(36).substring(2, 11);
+        let myName = 'User_' + Math.random().toString(36).substring(2, 6);
+
+        // DOM элементы
+        const roomIdInput = document.getElementById('roomIdInput');
+        const peerNameInput = document.getElementById('peerNameInput');
+        const joinBtn = document.getElementById('joinBtn');
+        const leaveBtn = document.getElementById('leaveBtn');
+        const connectionStatus = document.getElementById('connectionStatus');
+        const peersListDiv = document.getElementById('peersList');
+        const messagesDiv = document.getElementById('messages');
+        const messageInput = document.getElementById('messageInput');
+        const sendMsgBtn = document.getElementById('sendMsgBtn');
+        const fileInput = document.getElementById('fileInput');
+        const sendFileBtn = document.getElementById('sendFileBtn');
+        const startVideoBtn = document.getElementById('startVideoBtn');
+        const stopVideoBtn = document.getElementById('stopVideoBtn');
+        const localVideo = document.getElementById('localVideo');
+        const remoteVideos = document.getElementById('remoteVideos');
+
+        peerNameInput.value = myName;
+
+        function addMessage(text, isOwn = false) {
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `message ${isOwn ? 'own' : 'other'}`;
+            const name = isOwn ? 'Вы' : 'Пользователь';
+            msgDiv.innerHTML = `<strong>${name}:</strong> ${text} <small>${new Date().toLocaleTimeString()}</small>`;
+            messagesDiv.appendChild(msgDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
         }
-    </script>
 
-<script type="module">
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-
-const SUPABASE_URL = 'https://dlvlruldmaomehvcdofx.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRsdmxydWxkbWFvbWVodmNkb2Z4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ0NzQyMDAsImV4cCI6MjA5MDA1MDIwMH0.pwEQNa_yVGAg2SsQn92qyeZlCqF__303eoFxKkNvufA'; // ← твой реальный ключ
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
-let currentChannel = null;
-let myPeerId = 'user-' + Math.random().toString(36).substring(2, 11);
-let myName = 'User_' + Math.random().toString(36).substring(2, 6);
-let localStream = null;
-const peerConnections = new Map(); // peerId → RTCPeerConnection
-
-// DOM
-const roomIdInput = document.getElementById('roomIdInput');
-const peerNameInput = document.getElementById('peerNameInput');
-const joinBtn = document.getElementById('joinBtn');
-const leaveBtn = document.getElementById('leaveBtn');
-const connectionStatus = document.getElementById('connectionStatus');
-const peersListDiv = document.getElementById('peersList');
-const messagesDiv = document.getElementById('messages');
-const messageInput = document.getElementById('messageInput');
-const sendMsgBtn = document.getElementById('sendMsgBtn');
-const fileInput = document.getElementById('fileInput');
-const sendFileBtn = document.getElementById('sendFileBtn');
-const startVideoBtn = document.getElementById('startVideoBtn');
-const stopVideoBtn = document.getElementById('stopVideoBtn');
-const localVideo = document.getElementById('localVideo');
-const remoteVideos = document.getElementById('remoteVideos');
-
-peerNameInput.value = myName;
-
-function addMessage(text, isOwn = false) {
-    const msgDiv = document.createElement('div');
-    msgDiv.className = `message ${isOwn ? 'own' : 'other'}`;
-    const name = isOwn ? 'Вы' : 'Пользователь';
-    msgDiv.innerHTML = `<strong>${name}:</strong> ${text} <small>${new Date().toLocaleTimeString()}</small>`;
-    messagesDiv.appendChild(msgDiv);
-    messagesDiv.scrollTop = messagesDiv.scrollHeight;
-}
-
-function updateUIAfterJoin() {
-    joinBtn.disabled = true;
-    leaveBtn.disabled = false;
-    messageInput.disabled = false;
-    sendMsgBtn.disabled = false;
-    fileInput.disabled = false;
-    sendFileBtn.disabled = false;
-    startVideoBtn.disabled = false;
-    connectionStatus.innerHTML = '🟢 Подключено';
-    connectionStatus.style.color = '#0f0';
-    addMessage('✅ Вы присоединились к комнате', true);
-}
-
-function updateUIAfterLeave() {
-    joinBtn.disabled = false;
-    leaveBtn.disabled = true;
-    messageInput.disabled = true;
-    sendMsgBtn.disabled = true;
-    fileInput.disabled = true;
-    sendFileBtn.disabled = true;
-    startVideoBtn.disabled = true;
-    stopVideoBtn.disabled = true;
-    connectionStatus.innerHTML = '🔴 Отключено';
-    connectionStatus.style.color = 'red';
-}
-
-function updatePeersList(state) {
-    const count = Object.keys(state || {}).length;
-    peersListDiv.innerHTML = `👥 В комнате: ${count} участник${count !== 1 ? 'ов' : ''}`;
-}
-
-// ==================== JOIN ROOM ====================
-joinBtn.addEventListener('click', async () => {
-    const roomName = roomIdInput.value.trim() || 'test-room';
-    myName = peerNameInput.value.trim() || myName;
-
-    if (currentChannel) currentChannel.unsubscribe();
-
-    currentChannel = supabase.channel(roomName, {
-        config: { presence: { key: myPeerId } }
-    });
-
-    currentChannel.on('presence', { event: 'sync' }, () => {
-        updatePeersList(currentChannel.presenceState());
-    });
-
-    currentChannel.on('presence', { event: 'join' }, ({ newPresences }) => {
-        newPresences.forEach(p => addMessage(`👋 ${p.name || 'Пользователь'} присоединился`));
-    });
-
-    currentChannel.on('broadcast', { event: 'chat' }, ({ payload }) => {
-        if (payload.peerId !== myPeerId) addMessage(payload.text);
-    });
-
-    currentChannel.on('broadcast', { event: 'file' }, ({ payload }) => {
-        const blob = new Blob([payload.data], { type: payload.type });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = payload.name;
-        a.textContent = `📎 Скачать файл: ${payload.name}`;
-        a.style.display = 'block';
-        messagesDiv.appendChild(a);
-    });
-
-    // WebRTC signaling
-    currentChannel.on('broadcast', { event: 'webrtc' }, ({ payload }) => {
-        handleWebRTCSignal(payload);
-    });
-
-    await currentChannel.subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-            currentChannel.track({ peerId: myPeerId, name: myName });
-            updateUIAfterJoin();
+        function updateUIAfterJoin() {
+            joinBtn.disabled = true;
+            leaveBtn.disabled = false;
+            messageInput.disabled = false;
+            sendMsgBtn.disabled = false;
+            fileInput.disabled = false;
+            sendFileBtn.disabled = false;
+            startVideoBtn.disabled = false;
+            connectionStatus.innerHTML = '🟢 Подключено к комнате';
+            connectionStatus.style.color = '#0f0';
+            addMessage('✅ Вы присоединились к комнате', true);
         }
-    });
-});
 
-// ==================== SEND MESSAGE ====================
-sendMsgBtn.addEventListener('click', async () => {
-    const text = messageInput.value.trim();
-    if (!text || !currentChannel) return;
+        function updateUIAfterLeave() {
+            joinBtn.disabled = false;
+            leaveBtn.disabled = true;
+            messageInput.disabled = true;
+            sendMsgBtn.disabled = true;
+            fileInput.disabled = true;
+            sendFileBtn.disabled = true;
+            startVideoBtn.disabled = true;
+            connectionStatus.innerHTML = '🔴 Отключено';
+            connectionStatus.style.color = 'red';
+        }
 
-    await currentChannel.send({
-        type: 'broadcast',
-        event: 'chat',
-        payload: { text, peerId: myPeerId }
-    });
+        function updatePeersList(state) {
+            const count = Object.keys(state || {}).length;
+            peersListDiv.innerHTML = `👥 В комнате: ${count} участник${count !== 1 ? 'ов' : ''}`;
+        }
 
-    addMessage(text, true);
-    messageInput.value = '';
-});
+        // JOIN ROOM
+        joinBtn.addEventListener('click', async () => {
+            const roomName = roomIdInput.value.trim() || 'test-room';
+            myName = peerNameInput.value.trim() || myName;
 
-// ==================== SEND FILE ====================
-sendFileBtn.addEventListener('click', async () => {
-    const file = fileInput.files[0];
-    if (!file || !currentChannel) return;
+            if (currentChannel) currentChannel.unsubscribe();
 
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-        await currentChannel.send({
-            type: 'broadcast',
-            event: 'file',
-            payload: {
-                data: e.target.result,
-                name: file.name,
-                type: file.type || 'application/octet-stream'
-            }
+            currentChannel = supabase.channel(roomName, {
+                config: { presence: { key: myPeerId } }
+            });
+
+            currentChannel.on('presence', { event: 'sync' }, () => {
+                updatePeersList(currentChannel.presenceState());
+            });
+
+            currentChannel.on('presence', { event: 'join' }, ({ newPresences }) => {
+                newPresences.forEach(p => addMessage(`👋 ${p.name || 'Пользователь'} присоединился`));
+            });
+
+            currentChannel.on('broadcast', { event: 'chat' }, ({ payload }) => {
+                if (payload.peerId !== myPeerId) addMessage(payload.text);
+            });
+
+            currentChannel.on('broadcast', { event: 'file' }, ({ payload }) => {
+                const blob = new Blob([payload.data], { type: payload.type });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = payload.name;
+                a.textContent = `📎 Скачать: ${payload.name}`;
+                a.style.display = 'block';
+                messagesDiv.appendChild(a);
+            });
+
+            await currentChannel.subscribe((status) => {
+                if (status === 'SUBSCRIBED') {
+                    currentChannel.track({ peerId: myPeerId, name: myName });
+                    updateUIAfterJoin();
+                }
+            });
         });
-        addMessage(`📎 Вы отправили файл: ${file.name}`, true);
-        fileInput.value = '';
-    };
-    reader.readAsArrayBuffer(file);
-});
 
-// ==================== WebRTC (базовая сигнализация) ====================
-async function handleWebRTCSignal(payload) {
-    console.log('Received WebRTC signal:', payload);
-    // Здесь будет полная реализация RTCPeerConnection — добавим в следующем шаге, если нужно
-}
+        // SEND MESSAGE
+        sendMsgBtn.addEventListener('click', async () => {
+            const text = messageInput.value.trim();
+            if (!text || !currentChannel) return;
 
-// Start/Stop Video — пока заглушка
-startVideoBtn.addEventListener('click', () => {
-    addMessage('🎥 Видеозвонок пока в разработке', true);
-});
+            await currentChannel.send({
+                type: 'broadcast',
+                event: 'chat',
+                payload: { text, peerId: myPeerId }
+            });
 
-stopVideoBtn.addEventListener('click', () => {
-    addMessage('⏹️ Видеозвонок остановлен', true);
-});
+            addMessage(text, true);
+            messageInput.value = '';
+        });
 
-leaveBtn.addEventListener('click', () => {
-    if (currentChannel) currentChannel.unsubscribe();
-    currentChannel = null;
-    updateUIAfterLeave();
-});
+        // SEND FILE
+        sendFileBtn.addEventListener('click', async () => {
+            const file = fileInput.files[0];
+            if (!file || !currentChannel) return;
 
-updateUIAfterLeave();
-</script>
-    
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                await currentChannel.send({
+                    type: 'broadcast',
+                    event: 'file',
+                    payload: {
+                        data: e.target.result,
+                        name: file.name,
+                        type: file.type || 'application/octet-stream'
+                    }
+                });
+                addMessage(`📎 Отправлен файл: ${file.name}`, true);
+            };
+            reader.readAsArrayBuffer(file);
+            fileInput.value = '';
+        });
+
+        leaveBtn.addEventListener('click', () => {
+            if (currentChannel) currentChannel.unsubscribe();
+            currentChannel = null;
+            updateUIAfterLeave();
+        });
+
+        // Начальное состояние
+        updateUIAfterLeave();
+    </script>
 </body>
 </html>
