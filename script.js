@@ -10,9 +10,8 @@ let currentChannel = null;
 let myPeerId = 'user-' + Math.random().toString(36).substring(2, 11);
 let myName = 'User_' + Math.random().toString(36).substring(2, 6);
 let localStream = null;
-const peerConnections = new Map(); // peerId → RTCPeerConnection
+const peerConnections = new Map();
 
-// DOM элементы
 const roomIdInput = document.getElementById('roomIdInput');
 const peerNameInput = document.getElementById('peerNameInput');
 const joinBtn = document.getElementById('joinBtn');
@@ -51,8 +50,8 @@ function addMessage(text, isOwn = false) {
     // Плавная анимация появления сообщения
     gsap.from(msgDiv, { 
         opacity: 0, 
-        y: 20, 
-        duration: 0.5, 
+        y: 30, 
+        duration: 0.6, 
         ease: "power2.out" 
     });
 }
@@ -91,6 +90,10 @@ function updateUIAfterLeave() {
     `;
     connectionStatus.className = "flex items-center text-red-400 font-medium";
 }
+
+
+// Анимации при загрузке
+gsap.from("#app", { opacity: 0, scale: 0.95, duration: 1.2, ease: "power3.out" });
 
 function updatePeersList(state) {
     const count = Object.keys(state || {}).length;
@@ -342,3 +345,4 @@ updateUIAfterLeave();
 messageInput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') sendMsgBtn.click();
 });
+

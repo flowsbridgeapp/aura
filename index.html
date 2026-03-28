@@ -7,115 +7,91 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-    <link rel="icon" href="data:,">
-    
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap');
+        
+        :root {
+            --cyan: #67e8f9;
+            --magenta: #f472b6;
+        }
         
         body {
             font-family: 'Space Grotesk', sans-serif;
             background: #0a0a0a;
+            overflow: hidden;
         }
         
         .glass {
-            background: rgba(15, 23, 42, 0.65);
+            background: rgba(15, 23, 42, 0.72);
             backdrop-filter: blur(20px);
             border: 1px solid rgba(103, 232, 249, 0.25);
-            box-shadow: 0 0 30px -10px rgb(103 232 249);
+            box-shadow: 0 0 40px -15px rgb(103 232 249);
         }
         
-        .neon-cyan { text-shadow: 0 0 15px #67e8f9, 0 0 30px #22d3ee; }
-        .neon-magenta { text-shadow: 0 0 15px #f472b6, 0 0 30px #db2777; }
-        
-        .message-own {
-            background: linear-gradient(135deg, #67e8f9, #22d3ee);
-            color: #0f172a;
-            box-shadow: 0 0 20px #67e8f9;
-        }
-        
-        .message-other {
-            background: rgba(30, 41, 59, 0.85);
-            border-left: 4px solid #f472b6;
-        }
-        
-        .cyber-grid {
-            background-image: 
-                linear-gradient(rgba(103, 232, 249, 0.08) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(103, 232, 249, 0.08) 1px, transparent 1px);
-            background-size: 50px 50px;
-        }
+        .neon-cyan { text-shadow: 0 0 15px var(--cyan), 0 0 30px var(--cyan); }
+        .neon-magenta { text-shadow: 0 0 15px var(--magenta), 0 0 30px var(--magenta); }
         
         .scanline::after {
             content: '';
             position: absolute;
             inset: 0;
-            background: linear-gradient(transparent 50%, rgba(103, 232, 249, 0.15) 50%);
-            background-size: 100% 6px;
-            animation: scan 6s linear infinite;
+            background: linear-gradient(transparent 50%, rgba(103, 232, 249, 0.12) 50%);
+            background-size: 100% 8px;
+            animation: scan 7s linear infinite;
             pointer-events: none;
-            opacity: 0.15;
+            opacity: 0.2;
         }
         
-        @keyframes scan {
-            0% { background-position: 0 0; }
-            100% { background-position: 0 100%; }
-        }
+        @keyframes scan { 0% { background-position: 0 0; } 100% { background-position: 0 100%; } }
+        
+        .message-own { background: linear-gradient(135deg, #67e8f9, #22d3ee); color: #0f172a; }
+        .message-other { background: rgba(30, 41, 59, 0.9); border-left: 4px solid #f472b6; }
     </style>
 </head>
-<body class="cyber-grid min-h-screen text-white flex items-center justify-center p-6 relative overflow-hidden">
+<body class="scanline min-h-screen flex items-center justify-center p-4 bg-[#0a0a0a]">
 
-    <div id="app" class="glass w-full max-w-7xl rounded-3xl overflow-hidden border border-cyan-400/30 shadow-2xl">
+    <div id="app" class="glass w-full max-w-7xl rounded-3xl overflow-hidden border border-cyan-400/30 shadow-2xl relative">
+        
         <!-- HEADER -->
-        <div class="px-8 py-6 border-b border-cyan-400/30 flex items-center justify-between bg-black/60">
+        <div class="px-8 py-6 border-b border-cyan-400/30 flex items-center justify-between bg-black/70">
             <div class="flex items-center gap-4">
-                <div class="w-10 h-10 rounded-2xl bg-gradient-to-br from-cyan-400 to-magenta-500 flex items-center justify-center text-2xl font-bold neon-cyan">N</div>
+                <div class="w-11 h-11 rounded-2xl bg-gradient-to-br from-cyan-400 to-magenta-500 flex items-center justify-center text-3xl font-bold neon-cyan">N</div>
                 <div>
-                    <h1 class="text-4xl font-bold tracking-tighter neon-cyan">NEXUS</h1>
-                    <p class="text-xs tracking-[3px] text-cyan-300 -mt-1">DECENTRALIZED • P2P</p>
+                    <h1 class="text-4xl font-bold tracking-[-2px] neon-cyan">NEXUS</h1>
+                    <p class="text-xs tracking-[4px] text-cyan-300 -mt-1">P2P • DECENTRALIZED</p>
                 </div>
             </div>
             
-            <div class="flex items-center gap-8">
-                <div id="connectionStatus" class="flex items-center gap-2 text-sm font-medium"></div>
+            <div class="flex items-center gap-8 text-sm">
+                <div id="connectionStatus" class="flex items-center gap-2"></div>
                 <div id="peersList" class="text-cyan-300 font-medium"></div>
             </div>
             
             <div class="flex gap-3">
-                <button id="joinBtn" class="px-8 py-3 bg-cyan-500 hover:bg-cyan-400 text-black font-semibold rounded-2xl transition-all hover:scale-105 active:scale-95 neon-cyan">
-                    ПРИСОЕДИНИТЬСЯ
-                </button>
-                <button id="leaveBtn" disabled class="px-8 py-3 bg-red-500/80 hover:bg-red-500 rounded-2xl transition-all hover:scale-105">
-                    ПОКИНУТЬ
-                </button>
+                <button id="joinBtn" class="px-8 py-3.5 bg-cyan-500 hover:bg-cyan-400 text-black font-semibold rounded-2xl transition-all hover:scale-105 neon-cyan">ПРИСОЕДИНИТЬСЯ</button>
+                <button id="leaveBtn" disabled class="px-8 py-3.5 bg-red-500/80 hover:bg-red-500 text-white font-semibold rounded-2xl transition-all">ПОКИНУТЬ</button>
             </div>
         </div>
 
-        <div class="flex">
+        <div class="flex h-[calc(100vh-88px)]">
             <!-- CHAT -->
             <div class="flex-1 flex flex-col">
-                <div class="p-6 border-b border-cyan-400/20 flex gap-4">
-                    <input type="text" id="roomIdInput" value="test-room"
-                           class="flex-1 bg-slate-900/80 border border-cyan-400/30 rounded-2xl px-6 py-4 focus:outline-none focus:border-cyan-400 placeholder:text-cyan-400/40">
-                    <input type="text" id="peerNameInput" 
-                           class="w-52 bg-slate-900/80 border border-cyan-400/30 rounded-2xl px-6 py-4 focus:outline-none focus:border-cyan-400">
+                <div class="p-6 border-b border-cyan-400/20 flex gap-4 bg-black/40">
+                    <input type="text" id="roomIdInput" value="test-room" class="flex-1 bg-slate-900 border border-cyan-400/30 rounded-2xl px-6 py-4 focus:outline-none focus:border-cyan-400 text-white">
+                    <input type="text" id="peerNameInput" class="w-52 bg-slate-900 border border-cyan-400/30 rounded-2xl px-6 py-4 focus:outline-none focus:border-cyan-400 text-white">
                 </div>
 
                 <div id="messages" class="flex-1 overflow-y-auto p-6 space-y-5"></div>
 
-                <div class="p-6 border-t border-cyan-400/20 bg-black/40">
+                <div class="p-6 border-t border-cyan-400/20 bg-black/50">
                     <div class="flex gap-3">
                         <input id="messageInput" type="text" placeholder="Сообщение..." disabled
-                               class="flex-1 bg-slate-900 border border-cyan-400/30 rounded-3xl px-6 py-5 focus:outline-none focus:border-cyan-400">
-                        <button id="sendMsgBtn" disabled
-                                class="px-10 bg-gradient-to-r from-cyan-500 to-cyan-600 rounded-3xl font-semibold hover:brightness-110 transition-all">
-                            ОТПРАВИТЬ
-                        </button>
+                               class="flex-1 bg-slate-900 border border-cyan-400/30 rounded-3xl px-6 py-5 focus:outline-none focus:border-cyan-400 text-white">
+                        <button id="sendMsgBtn" disabled class="px-10 bg-gradient-to-r from-cyan-500 to-cyan-600 rounded-3xl font-semibold hover:brightness-110">ОТПРАВИТЬ</button>
                     </div>
-                    
                     <div class="mt-4 flex gap-3">
                         <input type="file" id="fileInput" class="hidden">
-                        <button id="sendFileBtn" disabled
-                                class="flex-1 py-4 border border-dashed border-magenta-400/50 hover:border-magenta-400 rounded-3xl text-sm flex items-center justify-center gap-2 transition-all">
+                        <button id="sendFileBtn" disabled class="flex-1 py-4 border border-dashed border-magenta-400/50 hover:border-magenta-400 rounded-3xl flex items-center justify-center gap-2">
                             <i class="fas fa-paperclip"></i> ОТПРАВИТЬ ФАЙЛ
                         </button>
                     </div>
@@ -123,27 +99,25 @@
             </div>
 
             <!-- VIDEO -->
-            <div class="w-[480px] flex flex-col bg-black/70 border-l border-cyan-400/20">
+            <div class="w-[460px] flex flex-col bg-black/70 border-l border-cyan-400/20">
                 <div class="p-6 border-b border-cyan-400/20">
                     <h3 class="text-xl font-semibold tracking-widest neon-magenta flex items-center gap-3">
                         <i class="fas fa-video"></i> ВИДЕО-ЗВОНОК
                     </h3>
                 </div>
-                
                 <div class="flex-1 p-6 flex flex-col gap-6">
                     <div class="glass rounded-3xl p-3">
                         <div class="aspect-video bg-black rounded-2xl overflow-hidden relative">
                             <video id="localVideo" autoplay muted playsinline class="w-full h-full object-cover"></video>
-                            <div class="absolute bottom-4 left-4 bg-black/70 text-xs px-4 py-1 rounded-2xl">ВЫ</div>
+                            <div class="absolute bottom-4 left-4 bg-black/70 px-4 py-1 rounded-2xl text-xs">ВЫ</div>
                         </div>
                     </div>
-                    
                     <div id="remoteVideos" class="flex-1 space-y-4 overflow-y-auto"></div>
                 </div>
 
                 <div class="p-6 border-t border-cyan-400/20 flex gap-4">
-                    <button id="startVideoBtn" disabled class="flex-1 py-5 bg-gradient-to-r from-cyan-500 to-cyan-600 rounded-3xl font-semibold hover:scale-105 transition-all">НАЧАТЬ ЗВОНОК</button>
-                    <button id="stopVideoBtn" disabled class="flex-1 py-5 bg-red-600/80 hover:bg-red-600 rounded-3xl font-semibold transition-all">ЗАВЕРШИТЬ</button>
+                    <button id="startVideoBtn" disabled class="flex-1 py-5 bg-gradient-to-r from-cyan-500 to-cyan-600 rounded-3xl font-semibold hover:scale-105">НАЧАТЬ ЗВОНОК</button>
+                    <button id="stopVideoBtn" disabled class="flex-1 py-5 bg-red-600/80 hover:bg-red-600 rounded-3xl font-semibold">ЗАВЕРШИТЬ</button>
                 </div>
             </div>
         </div>
