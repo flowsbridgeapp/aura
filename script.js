@@ -10,9 +10,8 @@ let currentChannel = null;
 let myPeerId = 'user-' + Math.random().toString(36).substring(2, 11);
 let myName = 'User_' + Math.random().toString(36).substring(2, 6);
 let localStream = null;
-const peerConnections = new Map(); // peerId → RTCPeerConnection
+const peerConnections = new Map();
 
-// DOM элементы
 const roomIdInput = document.getElementById('roomIdInput');
 const peerNameInput = document.getElementById('peerNameInput');
 const joinBtn = document.getElementById('joinBtn');
@@ -35,7 +34,6 @@ peerNameInput.value = myName;
 function addMessage(text, isOwn = false) {
     const msgDiv = document.createElement('div');
     msgDiv.className = `message p-4 rounded-2xl max-w-[85%] ${isOwn ? 'message-own ml-auto' : 'message-other'}`;
-    
     const name = isOwn ? 'Вы' : 'Пользователь';
     msgDiv.innerHTML = `
         <div class="flex items-center gap-2 mb-1">
@@ -44,10 +42,8 @@ function addMessage(text, isOwn = false) {
         </div>
         <div>${text}</div>
     `;
-    
     messagesDiv.appendChild(msgDiv);
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
-
     gsap.from(msgDiv, { opacity: 0, y: 20, duration: 0.5, ease: "power2.out" });
 }
 
@@ -60,7 +56,7 @@ function updateUIAfterJoin() {
     sendFileBtn.disabled = false;
     startVideoBtn.disabled = false;
 
-    connectionStatus.innerHTML = `<span class="inline-block w-3 h-3 bg-emerald-400 rounded-full animate-pulse mr-2"></span>ПОДКЛЮЧЕНО`;
+    connectionStatus.innerHTML = `<span class="w-3 h-3 bg-emerald-400 rounded-full animate-pulse inline-block mr-2"></span>ПОДКЛЮЧЕНО`;
     connectionStatus.className = "flex items-center text-emerald-400 font-medium";
     addMessage('✅ Вы присоединились к комнате', true);
 }
@@ -75,7 +71,7 @@ function updateUIAfterLeave() {
     startVideoBtn.disabled = true;
     stopVideoBtn.disabled = true;
 
-    connectionStatus.innerHTML = `<span class="inline-block w-3 h-3 bg-red-500 rounded-full mr-2"></span>ОТКЛЮЧЕНО`;
+    connectionStatus.innerHTML = `<span class="w-3 h-3 bg-red-500 rounded-full inline-block mr-2"></span>ОТКЛЮЧЕНО`;
     connectionStatus.className = "flex items-center text-red-400 font-medium";
 }
 

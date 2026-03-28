@@ -20,10 +20,9 @@
         }
         
         .glass {
-            background: rgba(15, 23, 42, 0.72);
+            background: rgba(15, 23, 42, 0.75);
             backdrop-filter: blur(20px);
-            border: 1px solid rgba(103, 232, 249, 0.25);
-            box-shadow: 0 0 40px -15px rgb(103 232 249);
+            border: 1px solid rgba(103, 232, 249, 0.3);
         }
         
         .neon-cyan { text-shadow: 0 0 15px var(--cyan), 0 0 30px var(--cyan); }
@@ -35,14 +34,14 @@
             inset: 0;
             background: linear-gradient(transparent 50%, rgba(103, 232, 249, 0.12) 50%);
             background-size: 100% 8px;
-            animation: scan 7s linear infinite;
+            animation: scan 8s linear infinite;
             pointer-events: none;
-            opacity: 0.2;
+            opacity: 0.15;
         }
         
         @keyframes scan { 0% { background-position: 0 0; } 100% { background-position: 0 100%; } }
         
-        .message-own { background: linear-gradient(135deg, #67e8f9, #22d3ee); color: #0f172a; }
+        .message-own { background: linear-gradient(135deg, #67e8f9, #22d3ee); color: #0f172a; box-shadow: 0 0 20px #67e8f9; }
         .message-other { background: rgba(30, 41, 59, 0.9); border-left: 4px solid #f472b6; }
     </style>
 </head>
@@ -51,45 +50,51 @@
     <div id="app" class="glass w-full max-w-7xl rounded-3xl overflow-hidden border border-cyan-400/30 shadow-2xl relative">
         
         <!-- HEADER -->
-        <div class="px-8 py-6 border-b border-cyan-400/30 flex items-center justify-between bg-black/70">
-            <div class="flex items-center gap-4">
-                <div class="w-11 h-11 rounded-2xl bg-gradient-to-br from-cyan-400 to-magenta-500 flex items-center justify-center text-3xl font-bold neon-cyan">N</div>
+        <div class="px-6 py-5 border-b border-cyan-400/30 flex items-center justify-between bg-black/70">
+            <div class="flex items-center gap-3">
+                <div class="w-9 h-9 rounded-2xl bg-gradient-to-br from-cyan-400 to-magenta-500 flex items-center justify-center text-2xl font-bold neon-cyan">N</div>
                 <div>
-                    <h1 class="text-4xl font-bold tracking-[-2px] neon-cyan">NEXUS</h1>
-                    <p class="text-xs tracking-[4px] text-cyan-300 -mt-1">P2P • DECENTRALIZED</p>
+                    <h1 class="text-3xl font-bold tracking-tight neon-cyan">NEXUS</h1>
+                    <p class="text-xs tracking-widest text-cyan-300 -mt-1">P2P • DECENTRALIZED</p>
                 </div>
             </div>
             
-            <div class="flex items-center gap-8 text-sm">
+            <div class="flex items-center gap-6 text-sm">
                 <div id="connectionStatus" class="flex items-center gap-2"></div>
                 <div id="peersList" class="text-cyan-300 font-medium"></div>
             </div>
             
             <div class="flex gap-3">
-                <button id="joinBtn" class="px-8 py-3.5 bg-cyan-500 hover:bg-cyan-400 text-black font-semibold rounded-2xl transition-all hover:scale-105 neon-cyan">ПРИСОЕДИНИТЬСЯ</button>
-                <button id="leaveBtn" disabled class="px-8 py-3.5 bg-red-500/80 hover:bg-red-500 text-white font-semibold rounded-2xl transition-all">ПОКИНУТЬ</button>
+                <button id="joinBtn" class="px-6 py-3 bg-cyan-500 hover:bg-cyan-400 text-black font-semibold rounded-2xl transition-all">ПРИСОЕДИНИТЬСЯ</button>
+                <button id="leaveBtn" disabled class="px-6 py-3 bg-red-500/80 hover:bg-red-500 text-white font-semibold rounded-2xl transition-all">ПОКИНУТЬ</button>
             </div>
         </div>
 
-        <div class="flex h-[calc(100vh-88px)]">
+        <div class="flex flex-col lg:flex-row h-[calc(100vh-76px)]">
+            
             <!-- CHAT -->
             <div class="flex-1 flex flex-col">
-                <div class="p-6 border-b border-cyan-400/20 flex gap-4 bg-black/40">
-                    <input type="text" id="roomIdInput" value="test-room" class="flex-1 bg-slate-900 border border-cyan-400/30 rounded-2xl px-6 py-4 focus:outline-none focus:border-cyan-400 text-white">
-                    <input type="text" id="peerNameInput" class="w-52 bg-slate-900 border border-cyan-400/30 rounded-2xl px-6 py-4 focus:outline-none focus:border-cyan-400 text-white">
+                <div class="p-4 border-b border-cyan-400/20 flex flex-col sm:flex-row gap-3 bg-black/40">
+                    <input type="text" id="roomIdInput" value="test-room" 
+                           class="flex-1 bg-slate-900 border border-cyan-400/30 rounded-2xl px-5 py-3.5 focus:outline-none focus:border-cyan-400 text-white text-base">
+                    <input type="text" id="peerNameInput" 
+                           class="sm:w-52 bg-slate-900 border border-cyan-400/30 rounded-2xl px-5 py-3.5 focus:outline-none focus:border-cyan-400 text-white">
                 </div>
 
-                <div id="messages" class="flex-1 overflow-y-auto p-6 space-y-5"></div>
+                <div id="messages" class="flex-1 overflow-y-auto p-5 space-y-4"></div>
 
-                <div class="p-6 border-t border-cyan-400/20 bg-black/50">
-                    <div class="flex gap-3">
+                <div class="p-4 border-t border-cyan-400/20 bg-black/50">
+                    <div class="flex gap-2">
                         <input id="messageInput" type="text" placeholder="Сообщение..." disabled
-                               class="flex-1 bg-slate-900 border border-cyan-400/30 rounded-3xl px-6 py-5 focus:outline-none focus:border-cyan-400 text-white">
-                        <button id="sendMsgBtn" disabled class="px-10 bg-gradient-to-r from-cyan-500 to-cyan-600 rounded-3xl font-semibold hover:brightness-110">ОТПРАВИТЬ</button>
+                               class="flex-1 bg-slate-900 border border-cyan-400/30 rounded-3xl px-6 py-4 focus:outline-none focus:border-cyan-400 text-white">
+                        <button id="sendMsgBtn" disabled 
+                                class="px-8 bg-gradient-to-r from-cyan-500 to-cyan-600 rounded-3xl font-semibold">→</button>
                     </div>
-                    <div class="mt-4 flex gap-3">
+                    
+                    <div class="mt-3">
                         <input type="file" id="fileInput" class="hidden">
-                        <button id="sendFileBtn" disabled class="flex-1 py-4 border border-dashed border-magenta-400/50 hover:border-magenta-400 rounded-3xl flex items-center justify-center gap-2">
+                        <button id="sendFileBtn" disabled
+                                class="w-full py-4 border border-dashed border-magenta-400/50 hover:border-magenta-400 rounded-3xl flex items-center justify-center gap-2 text-sm">
                             <i class="fas fa-paperclip"></i> ОТПРАВИТЬ ФАЙЛ
                         </button>
                     </div>
@@ -97,31 +102,32 @@
             </div>
 
             <!-- VIDEO -->
-            <div class="w-[460px] flex flex-col bg-black/70 border-l border-cyan-400/20">
-                <div class="p-6 border-b border-cyan-400/20">
-                    <h3 class="text-xl font-semibold tracking-widest neon-magenta flex items-center gap-3">
+            <div class="lg:w-96 flex flex-col bg-black/70 border-t lg:border-l border-cyan-400/20">
+                <div class="p-5 border-b border-cyan-400/20">
+                    <h3 class="text-lg font-semibold tracking-widest neon-magenta flex items-center gap-2">
                         <i class="fas fa-video"></i> ВИДЕО-ЗВОНОК
                     </h3>
                 </div>
-                <div class="flex-1 p-6 flex flex-col gap-6">
+                <div class="flex-1 p-5 flex flex-col gap-5">
                     <div class="glass rounded-3xl p-3">
                         <div class="aspect-video bg-black rounded-2xl overflow-hidden relative">
                             <video id="localVideo" autoplay muted playsinline class="w-full h-full object-cover"></video>
-                            <div class="absolute bottom-4 left-4 bg-black/70 px-4 py-1 rounded-2xl text-xs">ВЫ</div>
+                            <div class="absolute bottom-3 left-3 bg-black/70 px-3 py-1 rounded-xl text-xs">ВЫ</div>
                         </div>
                     </div>
                     <div id="remoteVideos" class="flex-1 space-y-4 overflow-y-auto"></div>
                 </div>
 
-                <div class="p-6 border-t border-cyan-400/20 flex gap-4">
-                    <button id="startVideoBtn" disabled class="flex-1 py-5 bg-gradient-to-r from-cyan-500 to-cyan-600 rounded-3xl font-semibold hover:scale-105">НАЧАТЬ ЗВОНОК</button>
-                    <button id="stopVideoBtn" disabled class="flex-1 py-5 bg-red-600/80 hover:bg-red-600 rounded-3xl font-semibold">ЗАВЕРШИТЬ</button>
+                <div class="p-5 border-t border-cyan-400/20 flex gap-3">
+                    <button id="startVideoBtn" disabled 
+                            class="flex-1 py-4 bg-gradient-to-r from-cyan-500 to-cyan-600 rounded-3xl font-semibold">НАЧАТЬ ЗВОНОК</button>
+                    <button id="stopVideoBtn" disabled 
+                            class="flex-1 py-4 bg-red-600/80 hover:bg-red-600 rounded-3xl font-semibold">ЗАВЕРШИТЬ</button>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Важно: type="module" -->
     <script type="module" src="script.js"></script>
 </body>
 </html>
