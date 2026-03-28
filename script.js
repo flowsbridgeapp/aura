@@ -10,8 +10,9 @@ let currentChannel = null;
 let myPeerId = 'user-' + Math.random().toString(36).substring(2, 11);
 let myName = 'User_' + Math.random().toString(36).substring(2, 6);
 let localStream = null;
-const peerConnections = new Map();
+const peerConnections = new Map(); // peerId → RTCPeerConnection
 
+// DOM элементы
 const roomIdInput = document.getElementById('roomIdInput');
 const peerNameInput = document.getElementById('peerNameInput');
 const joinBtn = document.getElementById('joinBtn');
@@ -47,13 +48,7 @@ function addMessage(text, isOwn = false) {
     messagesDiv.appendChild(msgDiv);
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
 
-    // Плавная анимация появления сообщения
-    gsap.from(msgDiv, { 
-        opacity: 0, 
-        y: 30, 
-        duration: 0.6, 
-        ease: "power2.out" 
-    });
+    gsap.from(msgDiv, { opacity: 0, y: 20, duration: 0.5, ease: "power2.out" });
 }
 
 function updateUIAfterJoin() {
@@ -65,13 +60,9 @@ function updateUIAfterJoin() {
     sendFileBtn.disabled = false;
     startVideoBtn.disabled = false;
 
-    connectionStatus.innerHTML = `
-        <span class="inline-block w-3 h-3 bg-emerald-400 rounded-full animate-pulse mr-2"></span>
-        ПОДКЛЮЧЕНО
-    `;
+    connectionStatus.innerHTML = `<span class="inline-block w-3 h-3 bg-emerald-400 rounded-full animate-pulse mr-2"></span>ПОДКЛЮЧЕНО`;
     connectionStatus.className = "flex items-center text-emerald-400 font-medium";
-    
-    addMessage('✅ Вы успешно присоединились к комнате', true);
+    addMessage('✅ Вы присоединились к комнате', true);
 }
 
 function updateUIAfterLeave() {
@@ -84,16 +75,9 @@ function updateUIAfterLeave() {
     startVideoBtn.disabled = true;
     stopVideoBtn.disabled = true;
 
-    connectionStatus.innerHTML = `
-        <span class="inline-block w-3 h-3 bg-red-500 rounded-full mr-2"></span>
-        ОТКЛЮЧЕНО
-    `;
+    connectionStatus.innerHTML = `<span class="inline-block w-3 h-3 bg-red-500 rounded-full mr-2"></span>ОТКЛЮЧЕНО`;
     connectionStatus.className = "flex items-center text-red-400 font-medium";
 }
-
-
-// Анимации при загрузке
-gsap.from("#app", { opacity: 0, scale: 0.95, duration: 1.2, ease: "power3.out" });
 
 function updatePeersList(state) {
     const count = Object.keys(state || {}).length;
@@ -120,7 +104,7 @@ const iceConfig = {
     iceCandidatePoolSize: 10
 };
 
-// ====================== WEBRTC HELPERS ======================
+// ====================== WEBRTC ======================
 async function createPeerConnection(peerId) {
     if (peerConnections.has(peerId)) return peerConnections.get(peerId);
 
@@ -159,12 +143,7 @@ async function createPeerConnection(peerId) {
             currentChannel.send({
                 type: 'broadcast',
                 event: 'webrtc',
-                payload: {
-                    type: 'ice-candidate',
-                    candidate: event.candidate,
-                    from: myPeerId,
-                    to: peerId
-                }
+                payload: { type: 'ice-candidate', candidate: event.candidate, from: myPeerId, to: peerId }
             });
         }
     };
@@ -189,11 +168,9 @@ async function handleWebRTCSignal(payload) {
                 event: 'webrtc',
                 payload: { type: 'answer', answer: pc.localDescription, from: myPeerId, to: from }
             });
-        } 
-        else if (type === 'answer') {
+        } else if (type === 'answer') {
             await pc.setRemoteDescription(new RTCSessionDescription(answer));
-        } 
-        else if (type === 'ice-candidate' && candidate) {
+        } else if (type === 'ice-candidate' && candidate) {
             await pc.addIceCandidate(new RTCIceCandidate(candidate));
         }
     } catch (err) {
@@ -212,14 +189,10 @@ joinBtn.addEventListener('click', async () => {
         config: { presence: { key: myPeerId } }
     });
 
-    currentChannel.on('presence', { event: 'sync' }, () => {
-        updatePeersList(currentChannel.presenceState());
-    });
+    currentChannel.on('presence', { event: 'sync' }, () => updatePeersList(currentChannel.presenceState()));
 
     currentChannel.on('presence', { event: 'join' }, ({ newPresences }) => {
-        newPresences.forEach(p => {
-            addMessage(`👋 ${p.name || 'Пользователь'} присоединился`);
-        });
+        newPresences.forEach(p => addMessage(`👋 ${p.name || 'Пользователь'} присоединился`));
     });
 
     currentChannel.on('broadcast', { event: 'chat' }, ({ payload }) => {
@@ -255,12 +228,7 @@ sendMsgBtn.addEventListener('click', async () => {
     const text = messageInput.value.trim();
     if (!text || !currentChannel) return;
 
-    await currentChannel.send({
-        type: 'broadcast',
-        event: 'chat',
-        payload: { text, peerId: myPeerId }
-    });
-
+    await currentChannel.send({ type: 'broadcast', event: 'chat', payload: { text, peerId: myPeerId } });
     addMessage(text, true);
     messageInput.value = '';
 });
@@ -275,11 +243,7 @@ sendFileBtn.addEventListener('click', async () => {
         await currentChannel.send({
             type: 'broadcast',
             event: 'file',
-            payload: {
-                data: e.target.result,
-                name: file.name,
-                type: file.type || 'application/octet-stream'
-            }
+            payload: { data: e.target.result, name: file.name, type: file.type || 'application/octet-stream' }
         });
         addMessage(`📎 Вы отправили файл: ${file.name}`, true);
     };
@@ -290,10 +254,7 @@ sendFileBtn.addEventListener('click', async () => {
 // ====================== VIDEO CALL ======================
 startVideoBtn.addEventListener('click', async () => {
     try {
-        localStream = await navigator.mediaDevices.getUserMedia({ 
-            video: { width: 1280, height: 720 }, 
-            audio: true 
-        });
+        localStream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: true });
         localVideo.srcObject = localStream;
 
         const state = currentChannel.presenceState();
@@ -332,7 +293,6 @@ stopVideoBtn.addEventListener('click', () => {
     addMessage('⏹️ Видеозвонок остановлен', true);
 });
 
-// ====================== LEAVE ======================
 leaveBtn.addEventListener('click', () => {
     if (currentChannel) currentChannel.unsubscribe();
     currentChannel = null;
@@ -342,7 +302,4 @@ leaveBtn.addEventListener('click', () => {
 
 // Инициализация
 updateUIAfterLeave();
-messageInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') sendMsgBtn.click();
-});
-
+messageInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMsgBtn.click(); });
