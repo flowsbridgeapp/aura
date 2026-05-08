@@ -1,16 +1,15 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 
-// КОНФИГУРАЦИЯ
-// Вставьте свои данные из панели управления Supabase
-const SUPABASE_URL = 'https://YOUR_PROJECT_ID.supabase.co'; 
-const SUPABASE_ANON_KEY = 'YOUR_ANON_KEY'; 
+// ВНИМАНИЕ: Замените эти значения на ваши данные из настроек Supabase (Settings -> API)
+// Используйте "Publishable key" (anon public). Он безопасен для браузера при включенном RLS.
+const SUPABASE_URL = 'https://nkgcsipcxwxhkyyvddet.supabase.co'; 
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_bKnk2aDCxZnw5Bqvhgf7ow_Wyg_m1NL'; 
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 
 const CHANNEL_NAME = 'public:chat';
 const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2MB
 
-// Элементы DOM
 const messagesContainer = document.getElementById('messages');
 const messageInput = document.getElementById('message-input');
 const sendBtn = document.getElementById('send-btn');
@@ -21,12 +20,10 @@ const fileInput = document.getElementById('file-input');
 const attachBtn = document.getElementById('attach-btn');
 const typingIndicator = document.getElementById('typing-indicator');
 
-// Состояние
 let localStream;
-let peers = new Map(); // peerId -> { pc, dataChannel, videoElement }
+let peers = new Map(); 
 let username = localStorage.getItem('p2p_username') || '';
 
-// Инициализация
 function init() {
     if (username) usernameInput.value = username;
     
@@ -40,19 +37,13 @@ function init() {
     setupEventListeners();
 }
 
-// Подключение к Supabase Realtime
 async function connectToSupabase() {
     updateStatus('Подключение...', 'connecting');
 
     const channel = supabase.channel(CHANNEL_NAME);
 
     channel
-        .on('system', { event: '*' }, payload => {
-            // Обработка системных событий (подключения/отключения пользователей)
-            if (payload.payload.type === 'user_added') {
-                // Логика приглашения нового пира (упрощено)
-            }
-        })
+        .on('system', { event: '*' }, payload => {})
         .on('broadcast', { event: 'offer' }, async ({ payload }) => {
             await handleOffer(payload);
         })
@@ -71,7 +62,7 @@ async function connectToSupabase() {
                 broadcastPresence();
             } else if (status === 'CHANNEL_ERROR') {
                 updateStatus('Ошибка соединения', 'error');
-                setTimeout(connectToSupabase, 3000); // Авто-переподключение
+                setTimeout(connectToSupabase, 3000);
             }
         });
 }
@@ -84,7 +75,6 @@ function broadcastPresence() {
     });
 }
 
-// WebRTC Логика
 async function setupMedia() {
     try {
         localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
@@ -127,14 +117,12 @@ function createPeerConnection(remoteId) {
         if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
             console.warn('Соединение с пиром потеряно:', remoteId);
             removePeer(remoteId);
-            // Можно добавить уведомление пользователю
         }
     };
 
     return pc;
 }
 
-// Обработчики сигналов
 async function handleOffer({ offer, from }) {
     const pc = createPeerConnection(from);
     peers.set(from, { pc });
@@ -181,16 +169,11 @@ function removePeer(peerId) {
     }
 }
 
-// Data Channel для чата (альтернатива Supabase для скорости, но Supabase надежнее для истории)
 function setupDataChannel(dc, peerId) {
     dc.onopen = () => console.log('DC open with', peerId);
-    dc.onmessage = (e) => {
-        // Если используете DC для чата, парсите здесь
-        // Для надежности в этом проекте основной чат идет через Supabase
-    };
+    dc.onmessage = (e) => {};
 }
 
-// Чат и Файлы
 function setupEventListeners() {
     sendBtn.addEventListener('click', sendMessage);
     messageInput.addEventListener('keypress', (e) => {
@@ -213,11 +196,10 @@ function sendMessage() {
         type: 'text'
     };
 
-    // Отправка через Supabase Realtime Broadcast
     supabase.channel(CHANNEL_NAME).send({
         type: 'broadcast',
         event: 'chat-message',
-        payload: { room: getRoomId(), data: messageData }
+        payload: { room: getRoomId(),  messageData }
     });
 
     renderMessage(messageData);
@@ -239,7 +221,7 @@ function handleFileSelect(e) {
         const messageData = {
             id: Date.now(),
             user: username || 'Аноним',
-            file: event.target.result, // Base64
+            file: event.target.result,
             fileName: file.name,
             fileType: file.type,
             timestamp: new Date().toISOString(),
@@ -249,7 +231,7 @@ function handleFileSelect(e) {
         supabase.channel(CHANNEL_NAME).send({
             type: 'broadcast',
             event: 'chat-message',
-            payload: { room: getRoomId(), data: messageData }
+            payload: { room: getRoomId(),  messageData }
         });
         
         renderMessage(messageData);
@@ -258,7 +240,6 @@ function handleFileSelect(e) {
     fileInput.value = '';
 }
 
-// Рендеринг с защитой от XSS
 function renderMessage(msg) {
     const div = document.createElement('div');
     div.className = `message ${msg.user === (username || 'Аноним') ? 'own' : 'other'}`;
@@ -278,7 +259,6 @@ function renderMessage(msg) {
         link.className = 'file-link';
         content.appendChild(link);
     } else {
-        // Безопасная вставка текста
         content.textContent = escapeHtml(msg.text);
     }
 
@@ -288,7 +268,6 @@ function renderMessage(msg) {
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
-// Утилиты
 function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
@@ -311,9 +290,7 @@ function updateStatus(text, className) {
 }
 
 function getRoomId() {
-    // Простая логика комнат, можно усложнить
     return 'global-room'; 
 }
 
-// Запуск
 init();
