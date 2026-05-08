@@ -1,7 +1,8 @@
-import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-
 // ВНИМАНИЕ: Замените эти значения на ваши данные из настроек Supabase (Settings -> API)
 // Используйте "Publishable key" (anon public). Он безопасен для браузера при включенном RLS.
+ 
+import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+
 const SUPABASE_URL = 'https://nkgcsipcxwxhkyyvddet.supabase.co'; 
 const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_bKnk2aDCxZnw5Bqvhgf7ow_Wyg_m1NL'; 
 
@@ -22,31 +23,28 @@ const typingIndicator = document.getElementById('typing-indicator');
 
 let localStream;
 let peers = new Map(); 
-let currentUser = { id: null, username: '' };
-let channel;
+let username = localStorage.getItem('p2p_username') || '';
+let currentUser = { id: null, name: '' };
 
 async function init() {
-    // 1. Восстанавливаем имя
-    const savedUsername = localStorage.getItem('p2p_username') || '';
-    if (savedUsername) {
-        usernameInput.value = savedUsername;
-        currentUser.username = savedUsername;
-    }
-
-    // Обработчик имени
+    // Восстановление имени
+    if (username) usernameInput.value = username;
+    
     usernameInput.addEventListener('change', (e) => {
-        currentUser.username = e.target.value.trim();
-        localStorage.setItem('p2p_username', currentUser.username);
-        if (channel) broadcastPresence();
+        username = e.target.value.trim();
+        localStorage.setItem('p2p_username', username);
+        currentUser.name = username;
     });
 
-    // 2. Получаем сессию пользователя (исправлено для v2)
+    // Получение сессии и ID пользователя
     try {
         const { data: { session } } = await supabase.auth.getSession();
-        currentUser.id = session?.user?.id || 'anon-' + Math.random().toString(36).substr(2, 9);
+        currentUser.id = session?.user?.id || 'guest-' + Math.random().toString(36).substr(2, 9);
+        currentUser.name = username || session?.user?.email || 'Аноним';
     } catch (e) {
-        console.warn('Auth error, using anon ID', e);
-        currentUser.id = 'anon-' + Math.random().toString(36).substr(2, 9);
+        console.warn('Auth error, using guest ID', e);
+        currentUser.id = 'guest-' + Math.random().toString(36).substr(2, 9);
+        currentUser.name = username || 'Аноним';
     }
 
     connectToSupabase();
@@ -57,7 +55,7 @@ async function init() {
 async function connectToSupabase() {
     updateStatus('Подключение...', 'connecting');
 
-    channel = supabase.channel(CHANNEL_NAME);
+    const channel = supabase.channel(CHANNEL_NAME);
 
     channel
         .on('broadcast', { event: 'offer' }, async ({ payload }) => {
@@ -70,14 +68,16 @@ async function connectToSupabase() {
             await handleIceCandidate(payload);
         })
         .on('broadcast', { event: 'chat-message' }, ({ payload }) => {
-            // Проверяем, что сообщение из нашей "комнаты" (можно добавить фильтрацию по payload.room)
-            renderMessage(payload.messageData);
+            // Проверяем, что payload и данные существуют
+            if (payload && payload.data) {
+                renderMessage(payload.data);
+            }
         })
         .subscribe(async (status) => {
             if (status === 'SUBSCRIBED') {
                 updateStatus('Онлайн', 'connected');
                 broadcastPresence();
-            } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            } else if (status === 'CHANNEL_ERROR') {
                 updateStatus('Ошибка соединения', 'error');
                 setTimeout(connectToSupabase, 3000);
             }
@@ -85,11 +85,11 @@ async function connectToSupabase() {
 }
 
 function broadcastPresence() {
-    if (!channel) return;
+    const channel = supabase.channel(CHANNEL_NAME);
     channel.send({
         type: 'broadcast',
         event: 'presence',
-        payload: { id: currentUser.id, username: currentUser.username }
+        payload: { id: currentUser.id, username: currentUser.name }
     });
 }
 
@@ -99,9 +99,13 @@ async function setupMedia() {
         const localVideo = createVideoElement(localStream, true);
         videoGrid.appendChild(localVideo);
     } catch (err) {
-        console.warn('Нет доступа к камере/микрофону (или устройство отсутствует):', err);
-        // Не ломаем приложение, просто показываем сообщение в консоль
-        // Можно добавить UI уведомление для пользователя
+        console.warn('Камера/микрофон недоступны:', err.message);
+        // Не блокируем работу приложения, просто не показываем видео
+        const noVideoMsg = document.createElement('div');
+        noVideoMsg.style.color = '#888';
+        noVideoMsg.style.textAlign = 'center';
+        noVideoMsg.textContent = 'Видео недоступно (камера занята или отсутствует)';
+        videoGrid.appendChild(noVideoMsg);
     }
 }
 
@@ -123,8 +127,8 @@ function createPeerConnection(remoteId) {
     };
 
     pc.onicecandidate = (event) => {
-        if (event.candidate && channel) {
-            channel.send({
+        if (event.candidate) {
+            supabase.channel(CHANNEL_NAME).send({
                 type: 'broadcast',
                 event: 'ice-candidate',
                 payload: { candidate: event.candidate, target: remoteId, from: currentUser.id }
@@ -158,13 +162,11 @@ async function handleOffer({ offer, from }) {
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
 
-    if (channel) {
-        channel.send({
-            type: 'broadcast',
-            event: 'answer',
-            payload: { answer, target: from, from: currentUser.id }
-        });
-    }
+    supabase.channel(CHANNEL_NAME).send({
+        type: 'broadcast',
+        event: 'answer',
+        payload: { answer, target: from, from: currentUser.id }
+    });
 }
 
 async function handleAnswer({ answer, from }) {
@@ -212,21 +214,21 @@ function setupEventListeners() {
 
 function sendMessage() {
     const text = messageInput.value.trim();
-    if (!text || !channel) return;
+    if (!text) return;
 
     const messageData = {
         id: Date.now(),
-        user: currentUser.username || 'Аноним',
-        userId: currentUser.id, // Добавляем ID для точного сравнения
+        userId: currentUser.id,
+        user: currentUser.name,
         text: text,
         timestamp: new Date().toISOString(),
         type: 'text'
     };
 
-    channel.send({
+    supabase.channel(CHANNEL_NAME).send({
         type: 'broadcast',
         event: 'chat-message',
-        payload: { room: 'global-room', messageData }
+        payload: { room: 'global-room', data: messageData }
     });
 
     renderMessage(messageData);
@@ -235,7 +237,7 @@ function sendMessage() {
 
 function handleFileSelect(e) {
     const file = e.target.files[0];
-    if (!file || !channel) return;
+    if (!file) return;
 
     if (file.size > MAX_FILE_SIZE) {
         alert(`Файл слишком большой! Максимальный размер: ${MAX_FILE_SIZE / 1024 / 1024}MB`);
@@ -247,8 +249,8 @@ function handleFileSelect(e) {
     reader.onload = (event) => {
         const messageData = {
             id: Date.now(),
-            user: currentUser.username || 'Аноним',
             userId: currentUser.id,
+            user: currentUser.name,
             file: event.target.result,
             fileName: file.name,
             fileType: file.type,
@@ -256,10 +258,10 @@ function handleFileSelect(e) {
             type: 'file'
         };
 
-        channel.send({
+        supabase.channel(CHANNEL_NAME).send({
             type: 'broadcast',
             event: 'chat-message',
-            payload: { room: 'global-room', messageData }
+            payload: { room: 'global-room', data: messageData }
         });
         
         renderMessage(messageData);
@@ -269,10 +271,11 @@ function handleFileSelect(e) {
 }
 
 function renderMessage(msg) {
+    if (!msg) return;
+
     const div = document.createElement('div');
-    // Сравниваем по userId, если он есть, иначе по имени
-    const isOwn = msg.userId ? msg.userId === currentUser.id : msg.user === (currentUser.username || 'Аноним');
-    
+    // Сравниваем ID отправителя с текущим пользователем
+    const isOwn = msg.userId === currentUser.id;
     div.className = `message ${isOwn ? 'own' : 'other'}`;
     
     const header = document.createElement('div');
@@ -289,7 +292,7 @@ function renderMessage(msg) {
         link.textContent = `📎 Скачать файл: ${escapeHtml(msg.fileName)}`;
         link.className = 'file-link';
         content.appendChild(link);
-    } else {
+    } else if (msg.text) {
         content.textContent = escapeHtml(msg.text);
     }
 
