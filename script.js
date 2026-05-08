@@ -1,301 +1,319 @@
-// script.js
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 
-const SUPABASE_URL = 'https://dlvlruldmaomehvcdofx.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRsdmxydWxkbWFvbWVodmNkb2Z4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ0NzQyMDAsImV4cCI6MjA5MDA1MDIwMH0.pwEQNa_yVGAg2SsQn92qyeZlCqF__303eoFxKkNvufA';
+// КОНФИГУРАЦИЯ
+// Вставьте свои данные из панели управления Supabase
+const SUPABASE_URL = 'https://YOUR_PROJECT_ID.supabase.co'; 
+const SUPABASE_ANON_KEY = 'YOUR_ANON_KEY'; 
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-let currentChannel = null;
-let myPeerId = 'user-' + Math.random().toString(36).substring(2, 11);
-let myName = 'User_' + Math.random().toString(36).substring(2, 6);
-let localStream = null;
-const peerConnections = new Map();
+const CHANNEL_NAME = 'public:chat';
+const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2MB
 
-const roomIdInput = document.getElementById('roomIdInput');
-const peerNameInput = document.getElementById('peerNameInput');
-const joinBtn = document.getElementById('joinBtn');
-const leaveBtn = document.getElementById('leaveBtn');
-const connectionStatus = document.getElementById('connectionStatus');
-const peersListDiv = document.getElementById('peersList');
-const messagesDiv = document.getElementById('messages');
-const messageInput = document.getElementById('messageInput');
-const sendMsgBtn = document.getElementById('sendMsgBtn');
-const fileInput = document.getElementById('fileInput');
-const sendFileBtn = document.getElementById('sendFileBtn');
-const startVideoBtn = document.getElementById('startVideoBtn');
-const stopVideoBtn = document.getElementById('stopVideoBtn');
-const localVideo = document.getElementById('localVideo');
-const remoteVideos = document.getElementById('remoteVideos');
+// Элементы DOM
+const messagesContainer = document.getElementById('messages');
+const messageInput = document.getElementById('message-input');
+const sendBtn = document.getElementById('send-btn');
+const usernameInput = document.getElementById('username');
+const statusSpan = document.getElementById('connection-status');
+const videoGrid = document.getElementById('video-grid');
+const fileInput = document.getElementById('file-input');
+const attachBtn = document.getElementById('attach-btn');
+const typingIndicator = document.getElementById('typing-indicator');
 
-peerNameInput.value = myName;
+// Состояние
+let localStream;
+let peers = new Map(); // peerId -> { pc, dataChannel, videoElement }
+let username = localStorage.getItem('p2p_username') || '';
 
-// ====================== UI FUNCTIONS ======================
-function addMessage(text, isOwn = false) {
-    const msgDiv = document.createElement('div');
-    msgDiv.className = `message p-4 rounded-2xl max-w-[85%] ${isOwn ? 'message-own ml-auto' : 'message-other'}`;
-    const name = isOwn ? 'Вы' : 'Пользователь';
-    msgDiv.innerHTML = `
-        <div class="flex items-center gap-2 mb-1">
-            <span class="font-semibold">${name}</span>
-            <span class="text-xs opacity-60">${new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
-        </div>
-        <div>${text}</div>
-    `;
-    messagesDiv.appendChild(msgDiv);
-    messagesDiv.scrollTop = messagesDiv.scrollHeight;
-    gsap.from(msgDiv, { opacity: 0, y: 20, duration: 0.5, ease: "power2.out" });
+// Инициализация
+function init() {
+    if (username) usernameInput.value = username;
+    
+    usernameInput.addEventListener('change', (e) => {
+        username = e.target.value.trim();
+        localStorage.setItem('p2p_username', username);
+    });
+
+    connectToSupabase();
+    setupMedia();
+    setupEventListeners();
 }
 
-function updateUIAfterJoin() {
-    joinBtn.disabled = true;
-    leaveBtn.disabled = false;
-    messageInput.disabled = false;
-    sendMsgBtn.disabled = false;
-    fileInput.disabled = false;
-    sendFileBtn.disabled = false;
-    startVideoBtn.disabled = false;
+// Подключение к Supabase Realtime
+async function connectToSupabase() {
+    updateStatus('Подключение...', 'connecting');
 
-    connectionStatus.innerHTML = `<span class="w-3 h-3 bg-emerald-400 rounded-full animate-pulse inline-block mr-2"></span>ПОДКЛЮЧЕНО`;
-    connectionStatus.className = "flex items-center text-emerald-400 font-medium";
-    addMessage('✅ Вы присоединились к комнате', true);
+    const channel = supabase.channel(CHANNEL_NAME);
+
+    channel
+        .on('system', { event: '*' }, payload => {
+            // Обработка системных событий (подключения/отключения пользователей)
+            if (payload.payload.type === 'user_added') {
+                // Логика приглашения нового пира (упрощено)
+            }
+        })
+        .on('broadcast', { event: 'offer' }, async ({ payload }) => {
+            await handleOffer(payload);
+        })
+        .on('broadcast', { event: 'answer' }, async ({ payload }) => {
+            await handleAnswer(payload);
+        })
+        .on('broadcast', { event: 'ice-candidate' }, async ({ payload }) => {
+            await handleIceCandidate(payload);
+        })
+        .on('broadcast', { event: 'chat-message', filter: `room=${getRoomId()}` }, ({ payload }) => {
+            renderMessage(payload.data);
+        })
+        .subscribe(async (status) => {
+            if (status === 'SUBSCRIBED') {
+                updateStatus('Онлайн', 'connected');
+                broadcastPresence();
+            } else if (status === 'CHANNEL_ERROR') {
+                updateStatus('Ошибка соединения', 'error');
+                setTimeout(connectToSupabase, 3000); // Авто-переподключение
+            }
+        });
 }
 
-function updateUIAfterLeave() {
-    joinBtn.disabled = false;
-    leaveBtn.disabled = true;
-    messageInput.disabled = true;
-    sendMsgBtn.disabled = true;
-    fileInput.disabled = true;
-    sendFileBtn.disabled = true;
-    startVideoBtn.disabled = true;
-    stopVideoBtn.disabled = true;
-
-    connectionStatus.innerHTML = `<span class="w-3 h-3 bg-red-500 rounded-full inline-block mr-2"></span>ОТКЛЮЧЕНО`;
-    connectionStatus.className = "flex items-center text-red-400 font-medium";
+function broadcastPresence() {
+    supabase.channel(CHANNEL_NAME).send({
+        type: 'broadcast',
+        event: 'presence',
+        payload: { id: supabase.auth.session()?.user?.id || 'anon', username }
+    });
 }
 
-function updatePeersList(state) {
-    const count = Object.keys(state || {}).length;
-    peersListDiv.textContent = `👥 ${count} в комнате`;
+// WebRTC Логика
+async function setupMedia() {
+    try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        const localVideo = createVideoElement(localStream, true);
+        videoGrid.appendChild(localVideo);
+    } catch (err) {
+        console.error('Ошибка доступа к медиа:', err);
+        alert('Не удалось получить доступ к камере/микрофону');
+    }
 }
 
-// ====================== ICE CONFIG ======================
-const iceConfig = {
-    iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-        {
-            urls: 'turn:openrelay.metered.ca:80',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-        },
-        {
-            urls: 'turn:openrelay.metered.ca:443',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-        }
-    ],
-    iceCandidatePoolSize: 10
-};
-
-// ====================== WEBRTC ======================
-async function createPeerConnection(peerId) {
-    if (peerConnections.has(peerId)) return peerConnections.get(peerId);
-
-    const pc = new RTCPeerConnection(iceConfig);
-    peerConnections.set(peerId, pc);
+function createPeerConnection(remoteId) {
+    const pc = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    });
 
     if (localStream) {
         localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
     }
 
     pc.ontrack = (event) => {
-        let wrapper = document.querySelector(`[data-peer="${peerId}"]`);
-        if (!wrapper) {
-            wrapper = document.createElement('div');
-            wrapper.className = 'glass rounded-3xl p-3';
-            wrapper.dataset.peer = peerId;
-            
-            const video = document.createElement('video');
-            video.autoplay = true;
-            video.playsInline = true;
-            video.className = "w-full aspect-video object-cover rounded-2xl";
-            
-            const label = document.createElement('div');
-            label.className = "text-center text-xs mt-2 text-cyan-300";
-            label.textContent = peerId.slice(0, 8);
-            
-            wrapper.appendChild(video);
-            wrapper.appendChild(label);
-            remoteVideos.appendChild(wrapper);
+        const existing = document.querySelector(`video[data-peer-id="${remoteId}"]`);
+        if (!existing && event.streams[0]) {
+            const video = createVideoElement(event.streams[0], false, remoteId);
+            videoGrid.appendChild(video);
         }
-        wrapper.querySelector('video').srcObject = event.streams[0];
     };
 
     pc.onicecandidate = (event) => {
-        if (event.candidate && currentChannel) {
-            currentChannel.send({
+        if (event.candidate) {
+            supabase.channel(CHANNEL_NAME).send({
                 type: 'broadcast',
-                event: 'webrtc',
-                payload: { type: 'ice-candidate', candidate: event.candidate, from: myPeerId, to: peerId }
+                event: 'ice-candidate',
+                payload: { candidate: event.candidate, target: remoteId, from: supabase.auth.session()?.user?.id }
             });
+        }
+    };
+
+    pc.onconnectionstatechange = () => {
+        if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+            console.warn('Соединение с пиром потеряно:', remoteId);
+            removePeer(remoteId);
+            // Можно добавить уведомление пользователю
         }
     };
 
     return pc;
 }
 
-async function handleWebRTCSignal(payload) {
-    const { type, from, to, offer, answer, candidate } = payload;
-    if (to && to !== myPeerId) return;
+// Обработчики сигналов
+async function handleOffer({ offer, from }) {
+    const pc = createPeerConnection(from);
+    peers.set(from, { pc });
 
-    let pc = peerConnections.get(from);
-    if (!pc) pc = await createPeerConnection(from);
+    const dataChannel = pc.createDataChannel('chat');
+    setupDataChannel(dataChannel, from);
 
-    try {
-        if (type === 'offer') {
-            await pc.setRemoteDescription(new RTCSessionDescription(offer));
-            const ans = await pc.createAnswer();
-            await pc.setLocalDescription(ans);
-            currentChannel.send({
-                type: 'broadcast',
-                event: 'webrtc',
-                payload: { type: 'answer', answer: pc.localDescription, from: myPeerId, to: from }
-            });
-        } else if (type === 'answer') {
-            await pc.setRemoteDescription(new RTCSessionDescription(answer));
-        } else if (type === 'ice-candidate' && candidate) {
-            await pc.addIceCandidate(new RTCIceCandidate(candidate));
-        }
-    } catch (err) {
-        console.error('WebRTC signal error:', err);
+    await pc.setRemoteDescription(new RTCSessionDescription(offer));
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+
+    supabase.channel(CHANNEL_NAME).send({
+        type: 'broadcast',
+        event: 'answer',
+        payload: { answer, target: from, from: supabase.auth.session()?.user?.id }
+    });
+}
+
+async function handleAnswer({ answer, from }) {
+    const peer = peers.get(from);
+    if (peer) {
+        await peer.pc.setRemoteDescription(new RTCSessionDescription(answer));
     }
 }
 
-// ====================== JOIN ROOM ======================
-joinBtn.addEventListener('click', async () => {
-    const roomName = roomIdInput.value.trim() || 'test-room';
-    myName = peerNameInput.value.trim() || myName;
-
-    if (currentChannel) currentChannel.unsubscribe();
-
-    currentChannel = supabase.channel(roomName, {
-        config: { presence: { key: myPeerId } }
-    });
-
-    currentChannel.on('presence', { event: 'sync' }, () => updatePeersList(currentChannel.presenceState()));
-
-    currentChannel.on('presence', { event: 'join' }, ({ newPresences }) => {
-        newPresences.forEach(p => addMessage(`👋 ${p.name || 'Пользователь'} присоединился`));
-    });
-
-    currentChannel.on('broadcast', { event: 'chat' }, ({ payload }) => {
-        if (payload.peerId !== myPeerId) addMessage(payload.text);
-    });
-
-    currentChannel.on('broadcast', { event: 'file' }, ({ payload }) => {
-        const blob = new Blob([payload.data], { type: payload.type });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = payload.name;
-        a.textContent = `📎 Скачать: ${payload.name}`;
-        a.style.display = 'block';
-        a.className = "text-cyan-400 hover:text-cyan-300 mt-2";
-        messagesDiv.appendChild(a);
-    });
-
-    currentChannel.on('broadcast', { event: 'webrtc' }, ({ payload }) => {
-        handleWebRTCSignal(payload);
-    });
-
-    await currentChannel.subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-            currentChannel.track({ peerId: myPeerId, name: myName });
-            updateUIAfterJoin();
+async function handleIceCandidate({ candidate, from }) {
+    const peer = peers.get(from);
+    if (peer) {
+        try {
+            await peer.pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (e) {
+            console.error('Ошибка добавления ICE кандидата', e);
         }
+    }
+}
+
+function removePeer(peerId) {
+    const peer = peers.get(peerId);
+    if (peer) {
+        peer.pc.close();
+        peers.delete(peerId);
+        const video = document.querySelector(`video[data-peer-id="${peerId}"]`);
+        if (video) video.remove();
+    }
+}
+
+// Data Channel для чата (альтернатива Supabase для скорости, но Supabase надежнее для истории)
+function setupDataChannel(dc, peerId) {
+    dc.onopen = () => console.log('DC open with', peerId);
+    dc.onmessage = (e) => {
+        // Если используете DC для чата, парсите здесь
+        // Для надежности в этом проекте основной чат идет через Supabase
+    };
+}
+
+// Чат и Файлы
+function setupEventListeners() {
+    sendBtn.addEventListener('click', sendMessage);
+    messageInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') sendMessage();
     });
-});
 
-// ====================== SEND MESSAGE ======================
-sendMsgBtn.addEventListener('click', async () => {
+    attachBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', handleFileSelect);
+}
+
+function sendMessage() {
     const text = messageInput.value.trim();
-    if (!text || !currentChannel) return;
+    if (!text) return;
 
-    await currentChannel.send({ type: 'broadcast', event: 'chat', payload: { text, peerId: myPeerId } });
-    addMessage(text, true);
+    const messageData = {
+        id: Date.now(),
+        user: username || 'Аноним',
+        text: text,
+        timestamp: new Date().toISOString(),
+        type: 'text'
+    };
+
+    // Отправка через Supabase Realtime Broadcast
+    supabase.channel(CHANNEL_NAME).send({
+        type: 'broadcast',
+        event: 'chat-message',
+        payload: { room: getRoomId(), data: messageData }
+    });
+
+    renderMessage(messageData);
     messageInput.value = '';
-});
+}
 
-// ====================== SEND FILE ======================
-sendFileBtn.addEventListener('click', async () => {
-    const file = fileInput.files[0];
-    if (!file || !currentChannel) return;
+function handleFileSelect(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    if (file.size > MAX_FILE_SIZE) {
+        alert(`Файл слишком большой! Максимальный размер: ${MAX_FILE_SIZE / 1024 / 1024}MB`);
+        fileInput.value = '';
+        return;
+    }
 
     const reader = new FileReader();
-    reader.onload = async (e) => {
-        await currentChannel.send({
+    reader.onload = (event) => {
+        const messageData = {
+            id: Date.now(),
+            user: username || 'Аноним',
+            file: event.target.result, // Base64
+            fileName: file.name,
+            fileType: file.type,
+            timestamp: new Date().toISOString(),
+            type: 'file'
+        };
+
+        supabase.channel(CHANNEL_NAME).send({
             type: 'broadcast',
-            event: 'file',
-            payload: { data: e.target.result, name: file.name, type: file.type || 'application/octet-stream' }
+            event: 'chat-message',
+            payload: { room: getRoomId(), data: messageData }
         });
-        addMessage(`📎 Вы отправили файл: ${file.name}`, true);
+        
+        renderMessage(messageData);
     };
-    reader.readAsArrayBuffer(file);
+    reader.readAsDataURL(file);
     fileInput.value = '';
-});
+}
 
-// ====================== VIDEO CALL ======================
-startVideoBtn.addEventListener('click', async () => {
-    try {
-        localStream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: true });
-        localVideo.srcObject = localStream;
+// Рендеринг с защитой от XSS
+function renderMessage(msg) {
+    const div = document.createElement('div');
+    div.className = `message ${msg.user === (username || 'Аноним') ? 'own' : 'other'}`;
+    
+    const header = document.createElement('div');
+    header.className = 'message-header';
+    header.textContent = `${msg.user} • ${new Date(msg.timestamp).toLocaleTimeString()}`;
+    
+    const content = document.createElement('div');
+    content.className = 'message-content';
 
-        const state = currentChannel.presenceState();
-        for (const peerId in state) {
-            if (peerId === myPeerId) continue;
-            const pc = await createPeerConnection(peerId);
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            currentChannel.send({
-                type: 'broadcast',
-                event: 'webrtc',
-                payload: { type: 'offer', offer: pc.localDescription, from: myPeerId, to: peerId }
-            });
-        }
-
-        startVideoBtn.disabled = true;
-        stopVideoBtn.disabled = false;
-        addMessage('🎥 Видеозвонок запущен', true);
-    } catch (err) {
-        console.error(err);
-        addMessage('❌ Не удалось получить доступ к камере/микрофону', true);
+    if (msg.type === 'file') {
+        const link = document.createElement('a');
+        link.href = msg.file;
+        link.download = msg.fileName;
+        link.textContent = `📎 Скачать файл: ${escapeHtml(msg.fileName)}`;
+        link.className = 'file-link';
+        content.appendChild(link);
+    } else {
+        // Безопасная вставка текста
+        content.textContent = escapeHtml(msg.text);
     }
-});
 
-stopVideoBtn.addEventListener('click', () => {
-    if (localStream) {
-        localStream.getTracks().forEach(track => track.stop());
-        localStream = null;
-        localVideo.srcObject = null;
-    }
-    peerConnections.forEach(pc => pc.close());
-    peerConnections.clear();
-    remoteVideos.innerHTML = '';
-    startVideoBtn.disabled = false;
-    stopVideoBtn.disabled = true;
-    addMessage('⏹️ Видеозвонок остановлен', true);
-});
+    div.appendChild(header);
+    div.appendChild(content);
+    messagesContainer.appendChild(div);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
 
-leaveBtn.addEventListener('click', () => {
-    if (currentChannel) currentChannel.unsubscribe();
-    currentChannel = null;
-    if (localStream) localStream.getTracks().forEach(t => t.stop());
-    updateUIAfterLeave();
-});
+// Утилиты
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
 
-// Инициализация
-updateUIAfterLeave();
-messageInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMsgBtn.click(); });
+function createVideoElement(stream, isLocal, peerId = null) {
+    const video = document.createElement('video');
+    video.srcObject = stream;
+    video.autoplay = true;
+    video.playsInline = true;
+    video.muted = isLocal;
+    if (peerId) video.dataset.peerId = peerId;
+    return video;
+}
+
+function updateStatus(text, className) {
+    statusSpan.textContent = text;
+    statusSpan.className = `status ${className}`;
+}
+
+function getRoomId() {
+    // Простая логика комнат, можно усложнить
+    return 'global-room'; 
+}
+
+// Запуск
+init();
