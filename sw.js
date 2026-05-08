@@ -30,7 +30,7 @@ self.addEventListener('activate', (event) => {
     self.clients.claim();
 });
 
-// Стратегия: Cache First для статики, Network First для API
+// Стратегия: Cache First для статики, Network First для API 
 self.addEventListener('fetch', (event) => {
     const url = new URL(event.request.url);
 
