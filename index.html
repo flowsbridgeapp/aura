@@ -2,55 +2,397 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Aura P2P Messenger</title>
     <link rel="manifest" href="manifest.json">
-    <meta name="theme-color" content="#4a90e2">
-    <!-- Исправленная строка ниже -->
-    <link rel="stylesheet" href="./style.css">
+    <meta name="theme-color" content="#0f172a">
+    <link rel="icon" type="image/png" href="icons/icon-192x192.png">
+    <style>
+        :root {
+            --bg-primary: #0f172a;
+            --bg-secondary: #1e293b;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --accent: #3b82f6;
+            --accent-glow: rgba(59, 130, 246, 0.5);
+            --danger: #ef4444;
+            --success: #22c55e;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Header */
+        header {
+            background: var(--bg-secondary);
+            padding: 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            z-index: 10;
+        }
+
+        .header-left { display: flex; align-items: center; gap: 10px; }
+        .logo { font-weight: bold; font-size: 1.2rem; color: var(--accent); text-shadow: 0 0 10px var(--accent-glow); }
+        
+        .status-badge {
+            background: rgba(59, 130, 246, 0.1);
+            color: var(--accent);
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: var(--accent);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        .participants-count {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            margin-left: 10px;
+            display: none; /* Скрыто по умолчанию */
+        }
+        .participants-count.active { display: inline-block; }
+
+        .room-info {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            background: rgba(255,255,255,0.05);
+            padding: 4px 8px;
+            border-radius: 4px;
+            margin-right: 10px;
+        }
+
+        /* Main Layout */
+        main {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* Video Grid */
+        #video-grid {
+            flex: 1;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            padding: 1rem;
+            overflow-y: auto;
+            background: #020617;
+        }
+
+        .video-container {
+            position: relative;
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            overflow: hidden;
+            aspect-ratio: 16/9;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            transition: transform 0.3s ease;
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1); /* Mirror effect */
+        }
+
+        .video-label {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.6);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            backdrop-filter: blur(4px);
+        }
+
+        /* Chat Sidebar */
+        #chat-panel {
+            width: 350px;
+            background: var(--bg-secondary);
+            border-left: 1px solid rgba(255,255,255,0.1);
+            display: flex;
+            flex-direction: column;
+            transition: transform 0.3s ease;
+        }
+
+        .chat-header {
+            padding: 1rem;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            font-weight: 600;
+        }
+
+        #messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.8rem;
+        }
+
+        .message {
+            background: rgba(255,255,255,0.05);
+            padding: 0.8rem;
+            border-radius: 8px;
+            max-width: 85%;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        .message.own {
+            align-self: flex-end;
+            background: var(--accent);
+            color: white;
+        }
+
+        .message-meta {
+            font-size: 0.75rem;
+            opacity: 0.7;
+            margin-bottom: 4px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .typing-indicator {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            padding: 0.5rem 1rem;
+            font-style: italic;
+            min-height: 24px;
+        }
+
+        .chat-input-area {
+            padding: 1rem;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            padding: 0.8rem;
+            border-radius: 8px;
+            color: white;
+            outline: none;
+        }
+
+        input[type="text"]:focus {
+            border-color: var(--accent);
+        }
+
+        button {
+            background: var(--accent);
+            color: white;
+            border: none;
+            padding: 0.8rem 1.2rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+
+        button:hover {
+            background: #2563eb;
+            transform: translateY(-1px);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        button.danger {
+            background: var(--danger);
+        }
+        
+        button.danger:hover {
+            background: #dc2626;
+        }
+
+        /* Login Modal */
+        #login-modal {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+            backdrop-filter: blur(5px);
+        }
+
+        .modal-content {
+            background: var(--bg-secondary);
+            padding: 2rem;
+            border-radius: 16px;
+            width: 90%;
+            max-width: 400px;
+            text-align: center;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+        }
+
+        .modal-content h2 { margin-bottom: 1.5rem; color: var(--accent); }
+        
+        .input-group { margin-bottom: 1rem; text-align: left; }
+        .input-group label { display: block; margin-bottom: 0.5rem; font-size: 0.9rem; color: var(--text-secondary); }
+        .input-group input { width: 100%; }
+
+        .hidden { display: none !important; }
+
+        /* Animations */
+        @keyframes pulse {
+            0% { opacity: 1; box-shadow: 0 0 0 0 var(--accent-glow); }
+            70% { opacity: 0.7; box-shadow: 0 0 0 6px rgba(59, 130, 246, 0); }
+            100% { opacity: 1; box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Mobile Responsiveness */
+        @media (max-width: 768px) {
+            #chat-panel {
+                position: absolute;
+                right: 0;
+                top: 0;
+                bottom: 0;
+                width: 100%;
+                transform: translateX(100%);
+                z-index: 20;
+            }
+            
+            #chat-panel.open {
+                transform: translateX(0);
+            }
+
+            #video-grid {
+                grid-template-columns: 1fr;
+                padding: 0.5rem;
+                gap: 0.5rem;
+            }
+
+            .video-container {
+                aspect-ratio: 16/9;
+            }
+
+            .mobile-toggle {
+                display: block !important;
+                position: fixed;
+                bottom: 20px;
+                right: 20px;
+                width: 56px;
+                height: 56px;
+                border-radius: 50%;
+                z-index: 30;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+                font-size: 1.5rem;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+
+            header {
+                padding: 0.8rem;
+            }
+            
+            .logo { font-size: 1rem; }
+            .status-badge { padding: 2px 8px; font-size: 0.75rem; }
+            
+            .participants-count {
+                display: none; /* Hide on very small screens if needed */
+            }
+            @media (min-width: 480px) {
+                .participants-count { display: inline-block; }
+            }
+        }
+
+        .mobile-toggle { display: none; }
+    </style>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>🌌 Aura Messenger</h1>
-            <div class="user-settings">
-                <input type="text" id="username" placeholder="Ваше имя" maxlength="20">
-                <span id="connection-status" class="status disconnected">Отключено</span>
-            </div>
-            <div class="peer-count" id="peer-count">
-                <span class="peer-icon">👥</span>
-                <span class="peer-number">0</span> участников
-            </div>
-        </header>
 
-        <main>
-            <div id="video-grid" class="video-grid"></div>
-            
-            <div class="chat-container">
-                <div id="messages" class="messages"></div>
-                <div class="input-area">
-                    <input type="file" id="file-input" hidden>
-                    <button id="attach-btn" title="Прикрепить файл">📎</button>
-                    <input type="text" id="message-input" placeholder="Введите сообщение..." autocomplete="off">
-                    <button id="send-btn">➤</button>
-                </div>
-                <div id="typing-indicator" class="typing-indicator"></div>
+    <!-- Login Modal -->
+    <div id="login-modal">
+        <div class="modal-content">
+            <h2>✨ Aura Messenger</h2>
+            <div class="input-group">
+                <label for="username">Ваше имя</label>
+                <input type="text" id="username" placeholder="Введите имя..." maxlength="20">
             </div>
-        </main>
+            <div class="input-group">
+                <label for="room-id">ID Комнаты (опционально)</label>
+                <input type="text" id="room-id" placeholder="Оставьте пустым для случайной">
+            </div>
+            <button id="join-btn">Войти в эфир</button>
+            <p style="margin-top: 1rem; font-size: 0.8rem; color: var(--text-secondary);">
+                P2P шифрование • Без серверов хранения
+            </p>
+        </div>
     </div>
 
-    <!-- Подключаем как модуль для работы с import/export -->
-    <script type="module" src="script.js"></script>
-    
-    <script>
-        // Регистрация Service Worker
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw.js')
-                    .then(reg => console.log('SW registered:', reg.scope))
-                    .catch(err => console.error('SW registration failed:', err));
-            });
-        }
-    </script>
+    <header>
+        <div class="header-left">
+            <div class="logo">AURA</div>
+            <div class="room-info" id="room-display">Room: ---</div>
+            <div class="status-badge">
+                <div class="status-dot"></div>
+                <span id="connection-status">Подключение...</span>
+            </div>
+            <div class="participants-count" id="participants-count">
+                👥 <span>0</span>
+            </div>
+        </div>
+        <button id="leave-btn" class="danger" style="padding: 0.5rem 1rem; font-size: 0.9rem;">Выйти</button>
+    </header>
+
+    <main>
+        <div id="video-grid">
+            <!-- Local video will be added here -->
+        </div>
+
+        <div id="chat-panel">
+            <div class="chat-header">
+                Чат комнаты
+                <button id="close-chat" class="mobile-toggle" style="position:absolute; right:10px; top:50%; transform:translateY(-50%); width:auto; height:auto; padding:4px 8px; font-size:0.8rem;">✕</button>
+            </div>
+            <div id="messages"></div>
+            <div class="typing-indicator" id="typing-indicator"></div>
+            <div class="chat-input-area">
+                <input type="text" id="message-input" placeholder="Сообщение..." autocomplete="off">
+                <button id="send-btn">➤</button>
+            </div>
+        </div>
+        
+        <button id="toggle-chat" class="mobile-toggle">💬</button>
+    </main>
+
+    <script type="module" src="src/main.js"></script>
 </body>
 </html>
