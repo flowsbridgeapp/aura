@@ -25,6 +25,8 @@ let localStream;
 let peers = new Map(); 
 let username = localStorage.getItem('p2p_username') || '';
 let currentUser = { id: null, name: '' };
+let connectedPeers = new Set(); // Track connected peers
+let typingTimeout;
 
 async function init() {
     // Восстановление имени
@@ -34,6 +36,11 @@ async function init() {
         username = e.target.value.trim();
         localStorage.setItem('p2p_username', username);
         currentUser.name = username;
+    });
+
+    // Typing indicator
+    messageInput.addEventListener('input', () => {
+        sendTypingIndicator();
     });
 
     // Получение сессии и ID пользователя
@@ -73,6 +80,12 @@ async function connectToSupabase() {
                 renderMessage(payload.data);
             }
         })
+        .on('broadcast', { event: 'typing' }, ({ payload }) => {
+            showTypingIndicator(payload);
+        })
+        .on('broadcast', { event: 'presence' }, ({ payload }) => {
+            updatePeerCount(payload);
+        })
         .subscribe(async (status) => {
             if (status === 'SUBSCRIBED') {
                 updateStatus('Онлайн', 'connected');
@@ -91,6 +104,21 @@ function broadcastPresence() {
         event: 'presence',
         payload: { id: currentUser.id, username: currentUser.name }
     });
+}
+
+function sendTypingIndicator() {
+    if (typingTimeout) clearTimeout(typingTimeout);
+    
+    const channel = supabase.channel(CHANNEL_NAME);
+    channel.send({
+        type: 'broadcast',
+        event: 'typing',
+        payload: { userId: currentUser.id, username: currentUser.name }
+    });
+    
+    typingTimeout = setTimeout(() => {
+        // Stop typing indicator after 2 seconds of inactivity
+    }, 2000);
 }
 
 async function setupMedia() {
@@ -192,6 +220,8 @@ function removePeer(peerId) {
     if (peer) {
         peer.pc.close();
         peers.delete(peerId);
+        connectedPeers.delete(peerId);
+        updatePeerCountDisplay();
         const video = document.querySelector(`video[data-peer-id="${peerId}"]`);
         if (video) video.remove();
     }
@@ -200,6 +230,37 @@ function removePeer(peerId) {
 function setupDataChannel(dc, peerId) {
     dc.onopen = () => console.log('DC open with', peerId);
     dc.onmessage = (e) => {};
+}
+
+function updatePeerCount(payload) {
+    // Add or update peer in the set
+    if (payload.id !== currentUser.id) {
+        connectedPeers.add(payload.id);
+        updatePeerCountDisplay();
+    }
+}
+
+function updatePeerCountDisplay() {
+    const peerCountEl = document.getElementById('peer-count');
+    if (peerCountEl) {
+        const count = connectedPeers.size + 1; // Include self
+        const numberEl = peerCountEl.querySelector('.peer-number');
+        if (numberEl) {
+            numberEl.textContent = count;
+        }
+    }
+}
+
+function showTypingIndicator(payload) {
+    if (payload.userId === currentUser.id) return; // Don't show for self
+    
+    typingIndicator.textContent = `${payload.username} печатает...`;
+    typingIndicator.classList.add('active');
+    
+    // Hide after 3 seconds
+    setTimeout(() => {
+        typingIndicator.classList.remove('active');
+    }, 3000);
 }
 
 function setupEventListeners() {
