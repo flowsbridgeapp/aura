@@ -226,7 +226,13 @@ function setupEventListeners() {
 }
 
 function subscribeToChannel() {
+    // Закрываем старый канал, если он был (защита от дублей при перезапуске)
+    if (window.signalingChannel) {
+        supabase.removeChannel(window.signalingChannel);
+    }
+
     const channel = supabase.channel('public:signaling');
+    window.signalingChannel = channel; // Сохраняем ссылку глобально для очистки
 
     channel
         .on('broadcast', { event: 'offer' }, async ({ payload }) => {
@@ -253,6 +259,11 @@ function subscribeToChannel() {
             if (status === 'SUBSCRIBED') {
                 elements.statusText.textContent = 'Онлайн';
                 elements.statusText.style.color = 'var(--success)';
+                state.connectionErrors = 0; // Сброс ошибок при успешной подписке
+            } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+                console.warn('Проблема с каналом сигнализации. Пробуем переподключиться...');
+                elements.statusText.textContent = 'Переподключение...';
+                elements.statusText.style.color = 'var(--danger)';
             }
         });
 }
