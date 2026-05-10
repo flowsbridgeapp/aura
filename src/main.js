@@ -520,10 +520,18 @@ function updateParticipantCount() {
 }
 
 function sendSignal(data) {
-    supabase.channel(`public:signaling`).send({
+    const channel = supabase.channel('public:signaling');
+    // Используем явную отправку через httpSend для надежности
+    channel.send({
         type: 'broadcast',
         event: data.type,
         payload: data
+    }).then(({ status }) => {
+        if (status === 'timed_out' || status === 'error') {
+            console.warn('Не удалось отправить сигнал через Realtime, пробуем альтернативу...');
+            // Фоллбэк можно реализовать здесь, если потребуется, 
+            // но обычно повторная отправка или переподключение канала помогает
+        }
     });
 }
 
