@@ -282,21 +282,19 @@ async function handleJoin() {
 function startPresenceLoop() {
     if (state.presenceInterval) clearInterval(state.presenceInterval);
     
-    state.connectionErrors = 0;
-    
-    // Первый вызов сразу
-    sendPresence();
+    sendPresence(); // Первый вызов сразу
 
-    // Интервал 15 секунд
+    // Увеличиваем интервал до 30 секунд для стабильности
     state.presenceInterval = setInterval(() => {
         sendPresence();
-    }, 15000);
+    }, 30000); 
 }
 
 async function sendPresence() {
     if (!state.roomId || !state.username) return;
 
     try {
+        // Пытаемся обновить запись
         const { error } = await supabase.from('presence').upsert(
             {
                 peer_id: state.peerId,
@@ -307,25 +305,20 @@ async function sendPresence() {
             { onConflict: 'peer_id,room_id' }
         );
 
-        if (error) throw error;
+        if (error) {
+            // Логируем, но НЕ прерываем работу и НЕ увеличиваем счетчик критических ошибок
+            // Ошибка 400 или сетевая ошибка здесь не должна ломать чат
+            console.debug('Фоновая ошибка presence (игнорируется):', error.message);
+            return; 
+        }
         
-        // Сброс счетчика ошибок при успехе
-        state.connectionErrors = 0;
-        
-        // Поиск пиров только если успешно обновились
+        // Если успех - можно найти новых пиров
         findPeers();
         
     } catch (error) {
-        console.warn('Ошибка обновления статуса (попытка игнорирована):', error.message);
-        state.connectionErrors++;
-        
-        // Если много ошибок подряд - останавливаем цикл, чтобы не спамить
-        if (state.connectionErrors > 5) {
-            console.error('Слишком много ошибок сети. Остановка обновления статуса.');
-            clearInterval(state.presenceInterval);
-            elements.statusText.textContent = 'Нет связи';
-            elements.statusText.style.color = 'var(--danger)';
-        }
+        // Ловим сетевые ошибки (ERR_CONNECTION_RESET и т.д.)
+        console.debug('Сетевая задержка при обновлении статуса (игнорируется)');
+        // Намеренно ничего не делаем, цикл продолжится через 30 сек
     }
 }
 
