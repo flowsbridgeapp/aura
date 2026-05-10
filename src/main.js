@@ -149,16 +149,22 @@ async function handleJoin() {
 
 function broadcastPresence() {
     // Периодическая отправка "я тут" для обнаружения пиров
-    setInterval(() => {
-        if (!state.roomId) return;
-        supabase.from('presence').upsert({
-            peer_id: state.peerId,
-            room_id: state.roomId,
-            username: state.username,
-            updated_at: new Date().toISOString()
-        }).then(() => {
-            // Очистка старых записей могла бы быть здесь или через Edge Function
-        });
+    setInterval(async () => {
+        if (!state.roomId || !state.username) return;
+        
+        const { error } = await supabase.from('presence').upsert(
+            {
+                peer_id: state.peerId,
+                room_id: state.roomId,
+                username: state.username,
+                updated_at: new Date().toISOString()
+            },
+            { 
+                onConflict: 'peer_id,room_id' // Указываем, по каким полям проверять уникальность
+            }
+        );
+        
+        if (error) console.error('Ошибка обновления presence:', error);
     }, 5000);
     
     // Поиск существующих пиров
