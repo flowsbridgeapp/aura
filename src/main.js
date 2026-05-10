@@ -9,7 +9,13 @@ if (SUPABASE_URL === 'YOUR_SUPABASE_URL') {
     console.warn('Предупреждение: Supabase не настроен.');
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+    realtime: {
+        params: {
+            eventsPerSecond: 10
+        }
+    }
+});
 
 // Состояние
 const state = {
@@ -20,17 +26,11 @@ const state = {
     peers: new Map(),
     isTyping: false,
     typingTimeout: null,
-    presenceInterval: null,
-    mediaDevices: {
-        hasVideo: false,
-        hasAudio: false,
-        videoEnabled: false,
-        audioEnabled: false
-    },
-    channel: null // Храним ссылку на канал
+    mediaDevices: { hasVideo: false, hasAudio: false, videoEnabled: false, audioEnabled: false },
+    channelJoined: false // Флаг готовности канала
 };
 
-// DOM Элементы
+// DOM
 const elements = {
     loginModal: document.getElementById('login-modal'),
     joinBtn: document.getElementById('join-btn'),
@@ -58,25 +58,26 @@ const elements = {
     audioLabel: document.getElementById('audio-label')
 };
 
+let signalingChannel = null;
+
 // Инициализация
 async function init() {
     setupEventListeners();
     await checkMediaDevices();
     
     const urlParams = new URLSearchParams(window.location.search);
-    const roomParam = urlParams.get('room');
-    if (roomParam) {
-        elements.roomIdInput.value = roomParam;
+    if (urlParams.get('room')) {
+        elements.roomIdInput.value = urlParams.get('room');
     }
 }
 
 async function checkMediaDevices() {
     try {
         const devices = await navigator.mediaDevices.enumerateDevices();
-        state.mediaDevices.hasVideo = devices.filter(d => d.kind === 'videoinput').length > 0;
-        state.mediaDevices.hasAudio = devices.filter(d => d.kind === 'audioinput').length > 0;
+        state.mediaDevices.hasVideo = devices.some(d => d.kind === 'videoinput');
+        state.mediaDevices.hasAudio = devices.some(d => d.kind === 'audioinput');
         updateSettingsUI();
-    } catch (err) {
+    } catch (e) {
         state.mediaDevices.hasVideo = false;
         state.mediaDevices.hasAudio = false;
         updateSettingsUI();
@@ -88,68 +89,50 @@ function updateSettingsUI() {
     elements.audioToggle.checked = state.mediaDevices.audioEnabled;
     elements.videoToggle.disabled = !state.mediaDevices.hasVideo;
     elements.audioToggle.disabled = !state.mediaDevices.hasAudio;
-
+    
     elements.videoLabel.textContent = state.mediaDevices.hasVideo 
-        ? (state.mediaDevices.videoEnabled ? "Камера включена" : "Камера выключена") 
+        ? (state.mediaDevices.videoEnabled ? "Камера вкл" : "Камера выкл") 
         : "Камера не найдена";
-        
     elements.audioLabel.textContent = state.mediaDevices.hasAudio 
-        ? (state.mediaDevices.audioEnabled ? "Микрофон включен" : "Микрофон выключен") 
+        ? (state.mediaDevices.audioEnabled ? "Микрфон вкл" : "Микрофон выкл") 
         : "Микрофон не найден";
 }
 
 async function handleMediaToggle(type) {
     const isEnabled = type === 'video' ? elements.videoToggle.checked : elements.audioToggle.checked;
     const hasDevice = type === 'video' ? state.mediaDevices.hasVideo : state.mediaDevices.hasAudio;
-
-    if (!hasDevice) {
-        // Если устройства нет, сбрасываем переключатель визуально
-        if(type === 'video') elements.videoToggle.checked = false;
-        else elements.audioToggle.checked = false;
-        return;
-    }
+    if (!hasDevice) return;
 
     if (isEnabled) {
         try {
-            const constraints = {
-                video: type === 'video',
-                audio: type === 'audio'
-            };
-            
+            const constraints = { video: type === 'video', audio: type === 'audio' };
             if (!state.localStream) {
                 state.localStream = await navigator.mediaDevices.getUserMedia(constraints);
                 addLocalVideo();
             } else {
                 const newStream = await navigator.mediaDevices.getUserMedia(constraints);
-                const newTrack = newStream.getTracks()[0];
-                state.localStream.addTrack(newTrack);
-                
+                const track = newStream.getTracks()[0];
+                state.localStream.addTrack(track);
+                // Обновляем пиры
                 state.peers.forEach(({ conn }) => {
-                    const sender = conn.getSenders().find(s => s.track && s.track.kind === newTrack.kind);
-                    if (sender) sender.replaceTrack(newTrack);
-                    else conn.addTrack(newTrack, state.localStream);
+                    const sender = conn.getSenders().find(s => s.track && s.track.kind === track.kind);
+                    if (sender) sender.replaceTrack(track);
+                    else conn.addTrack(track, state.localStream);
                 });
-
-                if (type === 'video' && !document.getElementById('local-video-container')) {
-                    addLocalVideo();
-                }
+                if (type === 'video' && !document.getElementById('local-video-container')) addLocalVideo();
             }
-            
             if (type === 'video') state.mediaDevices.videoEnabled = true;
             if (type === 'audio') state.mediaDevices.audioEnabled = true;
-
         } catch (err) {
-            console.error(`Ошибка доступа к ${type}:`, err);
+            console.error(err);
             if (type === 'video') { elements.videoToggle.checked = false; state.mediaDevices.videoEnabled = false; }
             else { elements.audioToggle.checked = false; state.mediaDevices.audioEnabled = false; }
-            alert(`Нет доступа к устройству. Проверьте разрешения браузера.`);
+            alert('Нет доступа к устройству');
         }
     } else {
         if (state.localStream) {
             const kind = type === 'video' ? 'video' : 'audio';
-            const tracks = state.localStream.getTracks().filter(t => t.kind === kind);
-            
-            tracks.forEach(track => {
+            state.localStream.getTracks().filter(t => t.kind === kind).forEach(track => {
                 track.stop();
                 state.localStream.removeTrack(track);
                 state.peers.forEach(({ conn }) => {
@@ -157,11 +140,10 @@ async function handleMediaToggle(type) {
                     if (sender) conn.removeTrack(sender);
                 });
             });
-
             if (type === 'video') {
                 state.mediaDevices.videoEnabled = false;
-                const localContainer = document.getElementById('local-video-container');
-                if (localContainer) localContainer.remove();
+                const el = document.getElementById('local-video-container');
+                if (el) el.remove();
             }
             if (type === 'audio') state.mediaDevices.audioEnabled = false;
         }
@@ -173,86 +155,67 @@ function setupEventListeners() {
     elements.joinBtn.addEventListener('click', handleJoin);
     elements.leaveBtn.addEventListener('click', handleLeave);
     elements.sendBtn.addEventListener('click', sendMessage);
-    elements.messageInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') sendMessage();
-        handleTyping();
-    });
+    elements.messageInput.addEventListener('keypress', e => { if (e.key === 'Enter') sendMessage(); handleTyping(); });
     
     elements.toggleChat.addEventListener('click', () => elements.chatPanel.classList.add('open'));
     elements.closeChat.addEventListener('click', () => elements.chatPanel.classList.remove('open'));
-
-    elements.settingsBtn.addEventListener('click', () => {
-        elements.settingsModal.classList.remove('hidden');
-        updateSettingsUI();
-    });
+    elements.settingsBtn.addEventListener('click', () => { elements.settingsModal.classList.remove('hidden'); updateSettingsUI(); });
     elements.closeSettings.addEventListener('click', () => elements.settingsModal.classList.add('hidden'));
-    
     elements.videoToggle.addEventListener('change', () => handleMediaToggle('video'));
     elements.audioToggle.addEventListener('change', () => handleMediaToggle('audio'));
 }
 
 async function handleJoin() {
     const username = elements.usernameInput.value.trim();
-    let roomId = elements.roomIdInput.value.trim();
-
     if (!username) return alert('Введите имя');
-
-    state.username = username;
     
+    let roomId = elements.roomIdInput.value.trim();
     if (!roomId) {
         roomId = uuidv4().split('-')[0];
-        const newUrl = window.location.pathname + '?room=' + roomId;
-        window.history.pushState({ path: newUrl }, '', newUrl);
+        window.history.pushState({}, '', window.location.pathname + '?room=' + roomId);
     }
 
+    state.username = username;
     state.roomId = roomId;
+    
     elements.roomDisplay.textContent = `Room: ${roomId}`;
     elements.loginModal.classList.add('hidden');
+    elements.statusText.textContent = 'Подключение...';
     
-    updateParticipantCount();
-    
-    // 1. Сначала загружаем историю сообщений
+    // Загружаем историю сообщений ПЕРЕД подключением к каналу
     await loadMessageHistory();
     
-    // 2. Затем подключаемся к_REALTIME_ каналу
-    subscribeToChannel();
-    
-    // 3. Запускаем цикл присутствия
-    startPresenceLoop();
+    // Подключаемся к каналу
+    connectToChannel();
 }
 
 async function loadMessageHistory() {
-    if (!state.roomId) return;
-    
+    elements.messages.innerHTML = '<div style="text-align:center; padding:20px; color:#94a3b8;">Загрузка истории...</div>';
     const { data, error } = await supabase
         .from('messages')
         .select('*')
         .eq('room_id', state.roomId)
         .order('created_at', { ascending: true })
-        .limit(50); // Последние 50 сообщений
-
-    if (error) {
-        console.error('Ошибка загрузки истории:', error);
-        return;
+        .limit(50);
+    
+    if (!error && data) {
+        elements.messages.innerHTML = '';
+        data.forEach(msg => renderMessage(msg.sender, msg.content, false, msg.created_at));
+    } else {
+        elements.messages.innerHTML = '';
     }
-
-    elements.messages.innerHTML = ''; // Очистка перед загрузкой
-    data.forEach(msg => {
-        renderMessage(msg.sender, msg.content, msg.sender === state.username, false);
-    });
 }
 
-function subscribeToChannel() {
-    // Закрываем старый канал если есть
-    if (state.channel) {
-        supabase.removeChannel(state.channel);
+function connectToChannel() {
+    if (signalingChannel) {
+        supabase.removeChannel(signalingChannel);
     }
 
-    state.channel = supabase.channel('public:signaling');
+    signalingChannel = supabase.channel(`public:signaling-${state.roomId}`);
 
-    state.channel
+    signalingChannel
         .on('broadcast', { event: 'offer' }, async ({ payload }) => {
-            if (payload.target !== state.peerId || payload.room !== state.roomId) return;
+            if (payload.target !== state.peerId) return;
             await handleOffer(payload);
         })
         .on('broadcast', { event: 'answer' }, async ({ payload }) => {
@@ -264,84 +227,130 @@ function subscribeToChannel() {
             await handleIceCandidate(payload);
         })
         .on('broadcast', { event: 'typing' }, ({ payload }) => {
-            if (payload.room !== state.roomId || payload.sender === state.username) return;
+            if (payload.sender === state.username) return;
             showTypingIndicator(payload.sender);
         })
         .on('broadcast', { event: 'chat-message' }, ({ payload }) => {
-            if (payload.room !== state.roomId) return;
-            // Добавляем сообщение в UI (не сохраняем в БД повторно, т.к. отправитель уже сохранил)
-            renderMessage(payload.sender, payload.text, false, true); // true = скролл вниз
+            // Игнорируем свои сообщения из канала (они уже добавлены локально)
+            if (payload.sender === state.username) return; 
+            renderMessage(payload.sender, payload.text, false, payload.timestamp);
         })
-        .subscribe((status) => {
+        .subscribe(status => {
             if (status === 'SUBSCRIBED') {
+                state.channelJoined = true;
                 elements.statusText.textContent = 'Онлайн';
                 elements.statusText.style.color = 'var(--success)';
-                console.log('Канал сигнализации активен');
+                updateParticipantCount(); // Просто обновим счетчик (1 человек)
             } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-                console.warn('Проблема с каналом. Supabase пытается переподключиться автоматически...');
-                elements.statusText.textContent = 'Переподключение...';
+                elements.statusText.textContent = 'Ошибка соединения';
                 elements.statusText.style.color = 'var(--danger)';
+                state.channelJoined = false;
+                // Пробуем переподключиться через 5 сек
+                setTimeout(connectToChannel, 5000);
             }
         });
 }
 
-function startPresenceLoop() {
-    if (state.presenceInterval) clearInterval(state.presenceInterval);
-    sendPresence();
-    state.presenceInterval = setInterval(sendPresence, 30000); // 30 секунд
-}
+function sendMessage() {
+    const text = elements.messageInput.value.trim();
+    if (!text || !state.roomId) return;
 
-async function sendPresence() {
-    if (!state.roomId || !state.username) return;
-    // Игнорируем ошибки полностью, чтобы не ломать логику при временных сбоях сети
-    await supabase.from('presence').upsert(
-        {
-            peer_id: state.peerId,
-            room_id: state.roomId,
-            username: state.username,
-            updated_at: new Date().toISOString()
-        },
-        { onConflict: 'peer_id,room_id' }
-    ).then(({ error }) => {
-        if (error) console.debug('Фоновая ошибка presence:', error.message);
-        else findPeers();
+    // 1. Отображаем у себя сразу
+    renderMessage(state.username, text, true);
+    elements.messageInput.value = '';
+
+    // 2. Сохраняем в БД (история)
+    supabase.from('messages').insert({
+        room_id: state.roomId,
+        sender: state.username,
+        content: text,
+        created_at: new Date().toISOString()
+    }).then(({ error }) => {
+        if (error) console.error('Ошибка сохранения в БД:', error);
     });
+
+    // 3. Отправляем в Realtime (если канал готов)
+    if (state.channelJoined && signalingChannel) {
+        signalingChannel.send({
+            type: 'broadcast',
+            event: 'chat-message',
+            payload: {
+                room: state.roomId,
+                sender: state.username,
+                text: text,
+                timestamp: new Date().toISOString()
+            }
+        });
+    } else {
+        console.warn('Канал не готов, сообщение сохранено в БД, но может не прийти мгновенно');
+    }
 }
 
-async function findPeers() {
-    const { data, error } = await supabase
-        .from('presence')
-        .select('peer_id, username')
-        .eq('room_id', state.roomId)
-        .neq('peer_id', state.peerId)
-        .gt('updated_at', new Date(Date.now() - 15000).toISOString());
+function renderMessage(user, text, isOwn, timestamp) {
+    const div = document.createElement('div');
+    div.className = `message ${isOwn ? 'own' : ''}`;
+    
+    let timeStr = '';
+    if (timestamp) {
+        const date = new Date(timestamp);
+        timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } else {
+        timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    
+    div.innerHTML = `
+        <div class="message-meta">
+            <span>${user}</span>
+            <span>${timeStr}</span>
+        </div>
+        <div class="message-body">${escapeHtml(text)}</div>
+    `;
+    
+    elements.messages.appendChild(div);
+    elements.messages.scrollTop = elements.messages.scrollHeight;
+}
 
-    if (error) return;
+function handleTyping() {
+    if (!state.roomId || !state.channelJoined) return;
+    if (state.isTyping) return;
 
-    data.forEach(peer => {
-        if (!state.peers.has(peer.peer_id)) {
-            createPeerConnection(peer.peer_id, true);
-        }
+    state.isTyping = true;
+    signalingChannel.send({
+        type: 'broadcast',
+        event: 'typing',
+        payload: { room: state.roomId, sender: state.username }
     });
+
+    clearTimeout(state.typingTimeout);
+    state.typingTimeout = setTimeout(() => {
+        state.isTyping = false;
+        elements.typingIndicator.textContent = '';
+    }, 2000);
 }
+
+function showTypingIndicator(username) {
+    elements.typingIndicator.textContent = `${username} печатает...`;
+    clearTimeout(state.typingTimeout);
+    state.typingTimeout = setTimeout(() => {
+        elements.typingIndicator.textContent = '';
+    }, 3000);
+}
+
+// --- WebRTC Логика (без изменений, кроме удаления presence) ---
 
 function addLocalVideo() {
     if (document.getElementById('local-video-container') || !state.localStream) return;
-
     const container = document.createElement('div');
     container.className = 'video-container';
     container.id = 'local-video-container';
-    
     const video = document.createElement('video');
     video.srcObject = state.localStream;
     video.autoplay = true;
     video.muted = true;
     video.playsInline = true;
-    
     const label = document.createElement('div');
     label.className = 'video-label';
     label.textContent = `${state.username} (Вы)`;
-
     container.appendChild(video);
     container.appendChild(label);
     elements.videoGrid.appendChild(container);
@@ -355,17 +364,23 @@ function createPeerConnection(peerId, isInitiator) {
         state.localStream.getTracks().forEach(track => conn.addTrack(track, state.localStream));
     }
 
-    conn.ontrack = (event) => addRemoteVideo(peerId, event.streams[0]);
-
-    conn.onicecandidate = (event) => {
-        if (event.candidate) {
-            sendSignal({ type: 'ice-candidate', target: peerId, candidate: event.candidate, room: state.roomId });
+    conn.ontrack = (e) => addRemoteVideo(peerId, e.streams[0]);
+    
+    conn.onicecandidate = (e) => {
+        if (e.candidate && state.channelJoined) {
+            signalingChannel.send({
+                type: 'broadcast',
+                event: 'ice-candidate',
+                target: peerId,
+                candidate: e.candidate,
+                room: state.roomId
+            });
         }
     };
 
     conn.onconnectionstatechange = () => {
         if (conn.connectionState === 'connected') updateParticipantCount();
-        else if (conn.connectionState === 'disconnected' || conn.connectionState === 'failed') removePeer(peerId);
+        if (conn.connectionState === 'disconnected' || conn.connectionState === 'failed') removePeer(peerId);
     };
 
     state.peers.set(peerId, { conn });
@@ -378,7 +393,16 @@ async function createOffer(peerId) {
     const offer = await conn.createOffer();
     await conn.setLocalDescription(offer);
     setTimeout(() => {
-        sendSignal({ type: 'offer', target: peerId, offer: conn.localDescription, sender: state.peerId, room: state.roomId });
+        if (state.channelJoined) {
+            signalingChannel.send({
+                type: 'broadcast',
+                event: 'offer',
+                target: peerId,
+                offer: conn.localDescription,
+                sender: state.peerId,
+                room: state.roomId
+            });
+        }
     }, 500);
 }
 
@@ -394,7 +418,15 @@ async function handleOffer(payload) {
     const answer = await conn.createAnswer();
     await conn.setLocalDescription(answer);
     setTimeout(() => {
-        sendSignal({ type: 'answer', target: payload.sender, answer: conn.localDescription, room: state.roomId });
+        if (state.channelJoined) {
+            signalingChannel.send({
+                type: 'broadcast',
+                event: 'answer',
+                target: payload.sender,
+                answer: conn.localDescription,
+                room: state.roomId
+            });
+        }
     }, 500);
 }
 
@@ -407,7 +439,7 @@ async function handleIceCandidate(payload) {
     const conn = state.peers.get(payload.sender)?.conn;
     if (conn && payload.candidate) {
         try { await conn.addIceCandidate(new RTCIceCandidate(payload.candidate)); } 
-        catch (e) { console.error('Ошибка кандидата:', e); }
+        catch (e) { console.error('ICE error', e); }
     }
 }
 
@@ -430,92 +462,24 @@ function addRemoteVideo(peerId, stream) {
 }
 
 function removePeer(peerId) {
-    const peerData = state.peers.get(peerId);
-    if (peerData) {
-        peerData.conn.close();
+    const p = state.peers.get(peerId);
+    if (p) {
+        p.conn.close();
         state.peers.delete(peerId);
-        const videoEl = document.getElementById(`video-${peerId}`);
-        if (videoEl) videoEl.remove();
+        const el = document.getElementById(`video-${peerId}`);
+        if (el) el.remove();
         updateParticipantCount();
     }
 }
 
 function updateParticipantCount() {
-    elements.participantsNumber.textContent = state.peers.size + 1;
+    const count = state.peers.size + 1;
+    elements.participantsNumber.textContent = count;
     elements.participantsCount.classList.add('active');
 }
 
-function sendSignal(data) {
-    if (state.channel) {
-        state.channel.send({ type: 'broadcast', event: data.type, payload: data });
-    }
-}
-
-async function sendMessage() {
-    const text = elements.messageInput.value.trim();
-    if (!text || !state.roomId) return;
-
-    // 1. Сохраняем в БД (гарантия доставки)
-    const { error } = await supabase.from('messages').insert({
-        room_id: state.roomId,
-        sender: state.username,
-        content: text
-    });
-
-    if (error) {
-        console.error('Ошибка сохранения сообщения:', error);
-        // Даже если БД недоступна, пробуем отправить через realtime (best effort)
-    }
-
-    // 2. Отображаем у себя
-    renderMessage(state.username, text, true, true);
-    elements.messageInput.value = '';
-    
-    // 3. Отправляем событие другим (для мгновенного отображения без перезагрузки)
-    sendSignal({
-        type: 'chat-message',
-        payload: {
-            room: state.roomId,
-            sender: state.username,
-            text: text,
-            timestamp: new Date().toISOString()
-        }
-    });
-}
-
-function renderMessage(user, text, isOwn, scroll = true) {
-    const div = document.createElement('div');
-    div.className = `message ${isOwn ? 'own' : ''}`;
-    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    div.innerHTML = `
-        <div class="message-meta"><span>${user}</span><span>${time}</span></div>
-        <div class="message-body">${escapeHtml(text)}</div>
-    `;
-    elements.messages.appendChild(div);
-    if (scroll) elements.messages.scrollTop = elements.messages.scrollHeight;
-}
-
-function handleTyping() {
-    if (!state.roomId) return;
-    if (!state.isTyping) {
-        state.isTyping = true;
-        sendSignal({ type: 'typing', payload: { room: state.roomId, sender: state.username } });
-    }
-    clearTimeout(state.typingTimeout);
-    state.typingTimeout = setTimeout(() => {
-        state.isTyping = false;
-        elements.typingIndicator.textContent = '';
-    }, 2000);
-}
-
-function showTypingIndicator(username) {
-    elements.typingIndicator.textContent = `${username} печатает...`;
-    clearTimeout(state.typingTimeout);
-    state.typingTimeout = setTimeout(() => { elements.typingIndicator.textContent = ''; }, 3000);
-}
-
 function handleLeave() {
-    if (confirm('Вы уверены?')) window.location.reload();
+    if (confirm('Выйти?')) window.location.reload();
 }
 
 function escapeHtml(text) {
