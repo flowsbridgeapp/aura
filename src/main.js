@@ -1,12 +1,12 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 import { v4 as uuidv4 } from 'https://cdn.jsdelivr.net/npm/uuid@9/+esm';
 
-// Конфигурация (Замените на ваши данные из Supabase)
+// КОНФИГУРАЦИЯ
 const SUPABASE_URL = 'https://nkgcsipcxwxhkyyvddet.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_bKnk2aDCxZnw5Bqvhgf7ow_Wyg_m1NL';
 
 if (SUPABASE_URL === 'YOUR_SUPABASE_URL') {
-    alert('Пожалуйста, настройте SUPABASE_URL и SUPABASE_KEY в src/main.js');
+    console.warn('Предупреждение: Supabase не настроен. Замените URL и KEY в main.js');
 }
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -17,10 +17,17 @@ const state = {
     roomId: null,
     peerId: uuidv4(),
     localStream: null,
-    peers: new Map(), // peerId -> { conn, video, channel }
-    pendingCandidates: new Map(), // peerId -> array of candidates
+    peers: new Map(),
     isTyping: false,
-    typingTimeout: null
+    typingTimeout: null,
+    presenceInterval: null,
+    mediaDevices: {
+        hasVideo: false,
+        hasAudio: false,
+        videoEnabled: false,
+        audioEnabled: false
+    },
+    connectionErrors: 0
 };
 
 // DOM Элементы
@@ -41,30 +48,156 @@ const elements = {
     typingIndicator: document.getElementById('typing-indicator'),
     toggleChat: document.getElementById('toggle-chat'),
     chatPanel: document.getElementById('chat-panel'),
-    closeChat: document.getElementById('close-chat')
+    closeChat: document.getElementById('close-chat'),
+    
+    // Новые элементы для настроек
+    settingsBtn: document.getElementById('settings-btn'),
+    settingsModal: document.getElementById('settings-modal'),
+    closeSettings: document.getElementById('close-settings'),
+    videoToggle: document.getElementById('video-toggle'),
+    audioToggle: document.getElementById('audio-toggle'),
+    videoLabel: document.getElementById('video-label'),
+    audioLabel: document.getElementById('audio-label')
 };
 
 // Инициализация
 async function init() {
     setupEventListeners();
+    await checkMediaDevices();
     
-    // Проверка параметров URL для входа в комнату
     const urlParams = new URLSearchParams(window.location.search);
     const roomParam = urlParams.get('room');
     if (roomParam) {
         elements.roomIdInput.value = roomParam;
     }
+}
 
+// Проверка доступности устройств (без запроса прав!)
+async function checkMediaDevices() {
     try {
-        state.localStream = await navigator.mediaDevices.getUserMedia({ 
-            video: true, 
-            audio: true 
-        });
-        addLocalVideo();
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        
+        const videoInputs = devices.filter(d => d.kind === 'videoinput');
+        const audioInputs = devices.filter(d => d.kind === 'audioinput');
+
+        state.mediaDevices.hasVideo = videoInputs.length > 0;
+        state.mediaDevices.hasAudio = audioInputs.length > 0;
+
+        updateSettingsUI();
     } catch (err) {
-        console.error('Ошибка доступа к медиа:', err);
-        alert('Не удалось получить доступ к камере/микрофону');
+        console.warn('Не удалось перечислить устройства:', err);
+        state.mediaDevices.hasVideo = false;
+        state.mediaDevices.hasAudio = false;
+        updateSettingsUI();
     }
+}
+
+function updateSettingsUI() {
+    // Обновление состояния переключателей
+    elements.videoToggle.checked = state.mediaDevices.videoEnabled;
+    elements.audioToggle.checked = state.mediaDevices.audioEnabled;
+
+    // Блокировка, если устройства нет
+    elements.videoToggle.disabled = !state.mediaDevices.hasVideo;
+    elements.audioToggle.disabled = !state.mediaDevices.hasAudio;
+
+    // Текст подсказки
+    elements.videoLabel.textContent = state.mediaDevices.hasVideo 
+        ? (state.mediaDevices.videoEnabled ? "Камера включена" : "Камера выключена") 
+        : "Камера не найдена";
+        
+    elements.audioLabel.textContent = state.mediaDevices.hasAudio 
+        ? (state.mediaDevices.audioEnabled ? "Микрофон включен" : "Микрофон выключен") 
+        : "Микрофон не найден";
+}
+
+async function handleMediaToggle(type) {
+    const isEnabled = type === 'video' ? elements.videoToggle.checked : elements.audioToggle.checked;
+    const hasDevice = type === 'video' ? state.mediaDevices.hasVideo : state.mediaDevices.hasAudio;
+
+    if (!hasDevice) return;
+
+    if (isEnabled) {
+        // Включение
+        try {
+            const constraints = {
+                video: type === 'video' ? true : false,
+                audio: type === 'audio' ? true : false
+            };
+            
+            // Если уже есть стрим, добавляем трек, иначе создаем новый
+            if (!state.localStream) {
+                state.localStream = await navigator.mediaDevices.getUserMedia({
+                    video: type === 'video',
+                    audio: type === 'audio'
+                });
+                addLocalVideo();
+            } else {
+                const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+                const newTrack = newStream.getTracks()[0];
+                state.localStream.addTrack(newTrack);
+                
+                // Обновляем треки в существующих соединениях
+                state.localStream.getTracks().forEach(track => {
+                    state.peers.forEach(({ conn }) => {
+                        const sender = conn.getSenders().find(s => s.track && s.track.kind === track.kind);
+                        if (sender) {
+                            sender.replaceTrack(track);
+                        } else {
+                            conn.addTrack(track, state.localStream);
+                        }
+                    });
+                });
+
+                // Перерисовка локального видео если добавилось видео
+                if (type === 'video' && !document.getElementById('local-video-container')) {
+                    addLocalVideo();
+                }
+            }
+            
+            if (type === 'video') state.mediaDevices.videoEnabled = true;
+            if (type === 'audio') state.mediaDevices.audioEnabled = true;
+
+        } catch (err) {
+            console.error(`Ошибка включения ${type}:`, err);
+            // Откат переключателя
+            if (type === 'video') {
+                elements.videoToggle.checked = false;
+                state.mediaDevices.videoEnabled = false;
+            } else {
+                elements.audioToggle.checked = false;
+                state.mediaDevices.audioEnabled = false;
+            }
+            alert(`Не удалось получить доступ к ${type === 'video' ? 'камере' : 'микрофону'}. Проверьте разрешения браузера.`);
+        }
+    } else {
+        // Выключение
+        if (state.localStream) {
+            const kind = type === 'video' ? 'video' : 'audio';
+            const tracks = state.localStream.getTracks().filter(t => t.kind === kind);
+            
+            tracks.forEach(track => {
+                track.stop();
+                state.localStream.removeTrack(track);
+                
+                // Уведомляем пиры об удалении трека
+                state.peers.forEach(({ conn }) => {
+                    const sender = conn.getSenders().find(s => s.track && s.track.kind === kind);
+                    if (sender) {
+                        conn.removeTrack(sender);
+                    }
+                });
+            });
+
+            if (type === 'video') {
+                state.mediaDevices.videoEnabled = false;
+                const localContainer = document.getElementById('local-video-container');
+                if (localContainer) localContainer.remove();
+            }
+            if (type === 'audio') state.mediaDevices.audioEnabled = false;
+        }
+    }
+    updateSettingsUI();
 }
 
 function setupEventListeners() {
@@ -76,20 +209,23 @@ function setupEventListeners() {
         handleTyping();
     });
     
-    // Мобильный чат
-    elements.toggleChat.addEventListener('click', () => {
-        elements.chatPanel.classList.add('open');
-    });
-    elements.closeChat.addEventListener('click', () => {
-        elements.chatPanel.classList.remove('open');
-    });
+    elements.toggleChat.addEventListener('click', () => elements.chatPanel.classList.add('open'));
+    elements.closeChat.addEventListener('click', () => elements.chatPanel.classList.remove('open'));
 
-    // Подписка на события Supabase
+    // Настройки
+    elements.settingsBtn.addEventListener('click', () => {
+        elements.settingsModal.classList.remove('hidden');
+        updateSettingsUI(); // Обновить статус при открытии
+    });
+    elements.closeSettings.addEventListener('click', () => elements.settingsModal.classList.add('hidden'));
+    
+    elements.videoToggle.addEventListener('change', () => handleMediaToggle('video'));
+    elements.audioToggle.addEventListener('change', () => handleMediaToggle('audio'));
+
     subscribeToChannel();
 }
 
 function subscribeToChannel() {
-    // Канал сигнализации
     const channel = supabase.channel('public:signaling');
 
     channel
@@ -130,8 +266,7 @@ async function handleJoin() {
     state.username = username;
     
     if (!roomId) {
-        roomId = uuidv4().split('-')[0]; // Короткий ID
-        // Обновляем URL без перезагрузки
+        roomId = uuidv4().split('-')[0];
         const newUrl = window.location.pathname + '?room=' + roomId;
         window.history.pushState({ path: newUrl }, '', newUrl);
     }
@@ -141,81 +276,82 @@ async function handleJoin() {
     elements.loginModal.classList.add('hidden');
     
     updateParticipantCount();
-
-    // Отправляем уведомление о присутствии (упрощенно через чат или отдельное событие)
-    // В реальном приложении лучше иметь таблицу presence
-    broadcastPresence();
+    startPresenceLoop();
 }
 
-function broadcastPresence() {
-    // Функция отправки данных
-    const sendPresence = async () => {
-        if (!state.roomId || !state.username) return;
-
-        const payload = {
-            peer_id: state.peerId,
-            room_id: state.roomId,
-            username: state.username,
-            updated_at: new Date().toISOString()
-        };
-
-        // Сначала пробуем обновить (UPDATE)
-        const { data: updateData, error: updateError } = await supabase
-            .from('presence')
-            .update(payload)
-            .eq('peer_id', state.peerId)
-            .eq('room_id', state.roomId);
-
-        // Если обновлено 0 строк, значит записи нет -> делаем INSERT
-        if (!updateError && updateData?.length === 0) {
-             const { error: insertError } = await supabase
-                .from('presence')
-                .insert([payload]);
-             
-             if (insertError) console.error('Ошибка INSERT presence:', insertError);
-        } else if (updateError) {
-            // Если ошибка обновления, пробуем игнорировать или логировать
-            // Иногда при гонке условий UPDATE может выдать ошибку, тогда пробуем upsert через insert с игнорированием дублей (если бы поддерживалось проще)
-            // Но для простоты: если UPDATE упал с ошибкой прав доступа - это проблема политик (см Шаг 1)
-            console.error('Ошибка UPDATE presence:', updateError);
-        }
-    };
-
-    // Запускаем немедленно
+function startPresenceLoop() {
+    if (state.presenceInterval) clearInterval(state.presenceInterval);
+    
+    state.connectionErrors = 0;
+    
+    // Первый вызов сразу
     sendPresence();
 
-    // И повторяем каждые 5 секунд
-    const intervalId = setInterval(() => {
-        if (!state.roomId) {
-            clearInterval(intervalId);
-            return;
-        }
+    // Интервал 15 секунд
+    state.presenceInterval = setInterval(() => {
         sendPresence();
-    }, 5000);
-    
-    // Поиск пиров
-    findPeers();
+    }, 15000);
+}
+
+async function sendPresence() {
+    if (!state.roomId || !state.username) return;
+
+    try {
+        const { error } = await supabase.from('presence').upsert(
+            {
+                peer_id: state.peerId,
+                room_id: state.roomId,
+                username: state.username,
+                updated_at: new Date().toISOString()
+            },
+            { onConflict: 'peer_id,room_id' }
+        );
+
+        if (error) throw error;
+        
+        // Сброс счетчика ошибок при успехе
+        state.connectionErrors = 0;
+        
+        // Поиск пиров только если успешно обновились
+        findPeers();
+        
+    } catch (error) {
+        console.warn('Ошибка обновления статуса (попытка игнорирована):', error.message);
+        state.connectionErrors++;
+        
+        // Если много ошибок подряд - останавливаем цикл, чтобы не спамить
+        if (state.connectionErrors > 5) {
+            console.error('Слишком много ошибок сети. Остановка обновления статуса.');
+            clearInterval(state.presenceInterval);
+            elements.statusText.textContent = 'Нет связи';
+            elements.statusText.style.color = 'var(--danger)';
+        }
+    }
 }
 
 async function findPeers() {
-    // Запрос к таблице presence для поиска других пользователей в комнате
+    const tenSecondsAgo = new Date(Date.now() - 10000).toISOString();
+    
     const { data, error } = await supabase
         .from('presence')
         .select('peer_id, username')
         .eq('room_id', state.roomId)
         .neq('peer_id', state.peerId)
-        .gt('updated_at', new Date(Date.now() - 10000).toISOString()); // Активны последние 10 сек
+        .gt('updated_at', tenSecondsAgo);
 
-    if (error) return console.error(error);
+    if (error) return;
 
     data.forEach(peer => {
         if (!state.peers.has(peer.peer_id)) {
-            createPeerConnection(peer.peer_id, true); // Initiator
+            createPeerConnection(peer.peer_id, true);
         }
     });
 }
 
 function addLocalVideo() {
+    if (document.getElementById('local-video-container')) return;
+    if (!state.localStream) return;
+
     const container = document.createElement('div');
     container.className = 'video-container';
     container.id = 'local-video-container';
@@ -223,7 +359,8 @@ function addLocalVideo() {
     const video = document.createElement('video');
     video.srcObject = state.localStream;
     video.autoplay = true;
-    video.muted = true; // Mute local to prevent feedback
+    video.muted = true;
+    video.playsInline = true;
     
     const label = document.createElement('div');
     label.className = 'video-label';
@@ -237,22 +374,21 @@ function addLocalVideo() {
 function createPeerConnection(peerId, isInitiator) {
     const config = {
         iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-        // Добавьте TURN серверы для продакшена
     };
 
     const conn = new RTCPeerConnection(config);
     
-    // Добавляем треки
-    state.localStream.getTracks().forEach(track => {
-        conn.addTrack(track, state.localStream);
-    });
+    // Добавляем текущие треки
+    if (state.localStream) {
+        state.localStream.getTracks().forEach(track => {
+            conn.addTrack(track, state.localStream);
+        });
+    }
 
-    // Обработка входящих треков
     conn.ontrack = (event) => {
         addRemoteVideo(peerId, event.streams[0]);
     };
 
-    // ICE Candidates
     conn.onicecandidate = (event) => {
         if (event.candidate) {
             sendSignal({
@@ -286,7 +422,6 @@ async function createOffer(peerId) {
     const offer = await conn.createOffer();
     await conn.setLocalDescription(offer);
 
-    // Ждем сбора ICE кандидатов перед отправкой (упрощенно)
     setTimeout(async () => {
         sendSignal({
             type: 'offer',
@@ -337,12 +472,7 @@ async function handleIceCandidate(payload) {
                 await conn.addIceCandidate(new RTCIceCandidate(payload.candidate));
             }
         } catch (e) {
-            console.error('Ошибка добавления кандидата:', e);
-            // Буферизация если соединение еще не готово
-            if (!state.pendingCandidates.has(payload.sender)) {
-                state.pendingCandidates.set(payload.sender, []);
-            }
-            state.pendingCandidates.get(payload.sender).push(payload.candidate);
+            console.error('Ошибка кандидата:', e);
         }
     }
 }
@@ -384,7 +514,7 @@ function removePeer(peerId) {
 }
 
 function updateParticipantCount() {
-    const count = state.peers.size + 1; // +1 для себя
+    const count = state.peers.size + 1;
     elements.participantsNumber.textContent = count;
     elements.participantsCount.classList.add('active');
 }
@@ -397,7 +527,6 @@ function sendSignal(data) {
     });
 }
 
-// Чат и Индикаторы
 function sendMessage() {
     const text = elements.messageInput.value.trim();
     if (!text || !state.roomId) return;
@@ -405,7 +534,6 @@ function sendMessage() {
     renderMessage(state.username, text, true);
     elements.messageInput.value = '';
     
-    // Отправка через Supabase Realtime
     supabase.channel(`public:signaling`).send({
         type: 'broadcast',
         event: 'chat-message',
@@ -439,7 +567,6 @@ function renderMessage(user, text, isOwn) {
 function handleTyping() {
     if (!state.roomId) return;
 
-    // Отправка события только если не отправляли недавно
     if (!state.isTyping) {
         state.isTyping = true;
         supabase.channel(`public:signaling`).send({
@@ -452,7 +579,6 @@ function handleTyping() {
         });
     }
 
-    // Сброс таймера
     clearTimeout(state.typingTimeout);
     state.typingTimeout = setTimeout(() => {
         state.isTyping = false;
