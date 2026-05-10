@@ -5,20 +5,13 @@ import { v4 as uuidv4 } from 'https://cdn.jsdelivr.net/npm/uuid@9/+esm';
 const SUPABASE_URL = 'https://nkgcsipcxwxhkyyvddet.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_bKnk2aDCxZnw5Bqvhgf7ow_Wyg_m1NL';
 
-
 if (SUPABASE_URL === 'YOUR_SUPABASE_URL') {
-    console.warn('Предупреждение: Supabase не настроен. Замените URL и KEY в main.js');
+    console.warn('Предупреждение: Supabase не настроен.');
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
-    realtime: {
-        params: {
-            eventsPerSecond: 10
-        }
-    }
-});
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// Состояние приложения
+// Состояние
 const state = {
     username: '',
     roomId: null,
@@ -77,7 +70,6 @@ async function init() {
     }
 }
 
-// Проверка устройств
 async function checkMediaDevices() {
     try {
         const devices = await navigator.mediaDevices.enumerateDevices();
@@ -85,7 +77,8 @@ async function checkMediaDevices() {
         state.mediaDevices.hasAudio = devices.filter(d => d.kind === 'audioinput').length > 0;
         updateSettingsUI();
     } catch (err) {
-        console.warn('Не удалось перечислить устройства:', err);
+        state.mediaDevices.hasVideo = false;
+        state.mediaDevices.hasAudio = false;
         updateSettingsUI();
     }
 }
@@ -109,7 +102,12 @@ async function handleMediaToggle(type) {
     const isEnabled = type === 'video' ? elements.videoToggle.checked : elements.audioToggle.checked;
     const hasDevice = type === 'video' ? state.mediaDevices.hasVideo : state.mediaDevices.hasAudio;
 
-    if (!hasDevice) return;
+    if (!hasDevice) {
+        // Если устройства нет, сбрасываем переключатель визуально
+        if(type === 'video') elements.videoToggle.checked = false;
+        else elements.audioToggle.checked = false;
+        return;
+    }
 
     if (isEnabled) {
         try {
@@ -126,12 +124,10 @@ async function handleMediaToggle(type) {
                 const newTrack = newStream.getTracks()[0];
                 state.localStream.addTrack(newTrack);
                 
-                state.localStream.getTracks().forEach(track => {
-                    state.peers.forEach(({ conn }) => {
-                        const sender = conn.getSenders().find(s => s.track && s.track.kind === track.kind);
-                        if (sender) sender.replaceTrack(track);
-                        else conn.addTrack(track, state.localStream);
-                    });
+                state.peers.forEach(({ conn }) => {
+                    const sender = conn.getSenders().find(s => s.track && s.track.kind === newTrack.kind);
+                    if (sender) sender.replaceTrack(newTrack);
+                    else conn.addTrack(newTrack, state.localStream);
                 });
 
                 if (type === 'video' && !document.getElementById('local-video-container')) {
@@ -143,15 +139,10 @@ async function handleMediaToggle(type) {
             if (type === 'audio') state.mediaDevices.audioEnabled = true;
 
         } catch (err) {
-            console.error(`Ошибка включения ${type}:`, err);
-            if (type === 'video') {
-                elements.videoToggle.checked = false;
-                state.mediaDevices.videoEnabled = false;
-            } else {
-                elements.audioToggle.checked = false;
-                state.mediaDevices.audioEnabled = false;
-            }
-            alert(`Нет доступа к ${type === 'video' ? 'камере' : 'микрофону'}.`);
+            console.error(`Ошибка доступа к ${type}:`, err);
+            if (type === 'video') { elements.videoToggle.checked = false; state.mediaDevices.videoEnabled = false; }
+            else { elements.audioToggle.checked = false; state.mediaDevices.audioEnabled = false; }
+            alert(`Нет доступа к устройству. Проверьте разрешения браузера.`);
         }
     } else {
         if (state.localStream) {
@@ -198,12 +189,61 @@ function setupEventListeners() {
     
     elements.videoToggle.addEventListener('change', () => handleMediaToggle('video'));
     elements.audioToggle.addEventListener('change', () => handleMediaToggle('audio'));
+}
 
-    // Подписка создается только после входа в комнату
+async function handleJoin() {
+    const username = elements.usernameInput.value.trim();
+    let roomId = elements.roomIdInput.value.trim();
+
+    if (!username) return alert('Введите имя');
+
+    state.username = username;
+    
+    if (!roomId) {
+        roomId = uuidv4().split('-')[0];
+        const newUrl = window.location.pathname + '?room=' + roomId;
+        window.history.pushState({ path: newUrl }, '', newUrl);
+    }
+
+    state.roomId = roomId;
+    elements.roomDisplay.textContent = `Room: ${roomId}`;
+    elements.loginModal.classList.add('hidden');
+    
+    updateParticipantCount();
+    
+    // 1. Сначала загружаем историю сообщений
+    await loadMessageHistory();
+    
+    // 2. Затем подключаемся к_REALTIME_ каналу
+    subscribeToChannel();
+    
+    // 3. Запускаем цикл присутствия
+    startPresenceLoop();
+}
+
+async function loadMessageHistory() {
+    if (!state.roomId) return;
+    
+    const { data, error } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('room_id', state.roomId)
+        .order('created_at', { ascending: true })
+        .limit(50); // Последние 50 сообщений
+
+    if (error) {
+        console.error('Ошибка загрузки истории:', error);
+        return;
+    }
+
+    elements.messages.innerHTML = ''; // Очистка перед загрузкой
+    data.forEach(msg => {
+        renderMessage(msg.sender, msg.content, msg.sender === state.username, false);
+    });
 }
 
 function subscribeToChannel() {
-    // Если канал уже есть, закрываем его перед созданием нового
+    // Закрываем старый канал если есть
     if (state.channel) {
         supabase.removeChannel(state.channel);
     }
@@ -229,102 +269,52 @@ function subscribeToChannel() {
         })
         .on('broadcast', { event: 'chat-message' }, ({ payload }) => {
             if (payload.room !== state.roomId) return;
-            renderMessage(payload.sender, payload.text, false);
+            // Добавляем сообщение в UI (не сохраняем в БД повторно, т.к. отправитель уже сохранил)
+            renderMessage(payload.sender, payload.text, false, true); // true = скролл вниз
         })
-        .subscribe((status, err) => {
+        .subscribe((status) => {
             if (status === 'SUBSCRIBED') {
                 elements.statusText.textContent = 'Онлайн';
                 elements.statusText.style.color = 'var(--success)';
                 console.log('Канал сигнализации активен');
             } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-                console.warn('Проблема с соединением Supabase. Попытка восстановления...');
+                console.warn('Проблема с каналом. Supabase пытается переподключиться автоматически...');
                 elements.statusText.textContent = 'Переподключение...';
-                elements.statusText.style.color = 'var(--accent)';
-                // Библиотека сама попытается переподключиться, нам нужно просто ждать
-            } else if (status === 'CLOSED') {
-                 elements.statusText.textContent = 'Отключено';
-                 elements.statusText.style.color = 'var(--danger)';
+                elements.statusText.style.color = 'var(--danger)';
             }
         });
 }
 
-async function handleJoin() {
-    const username = elements.usernameInput.value.trim();
-    let roomId = elements.roomIdInput.value.trim();
-
-    if (!username) return alert('Введите имя');
-
-    state.username = username;
-    
-    if (!roomId) {
-        roomId = uuidv4().split('-')[0];
-        const newUrl = window.location.pathname + '?room=' + roomId;
-        window.history.pushState({ path: newUrl }, '', newUrl);
-    }
-
-    state.roomId = roomId;
-    elements.roomDisplay.textContent = `Room: ${roomId}`;
-    elements.loginModal.classList.add('hidden');
-    
-    updateParticipantCount();
-    
-    // Сначала подписываемся на канал, потом запускаем фондовые задачи
-    subscribeToChannel();
-    startPresenceLoop();
-}
-
 function startPresenceLoop() {
     if (state.presenceInterval) clearInterval(state.presenceInterval);
-    
-    sendPresence(); 
-
-    // Увеличенный интервал для стабильности
-    state.presenceInterval = setInterval(() => {
-        sendPresence();
-    }, 30000); 
+    sendPresence();
+    state.presenceInterval = setInterval(sendPresence, 30000); // 30 секунд
 }
 
 async function sendPresence() {
     if (!state.roomId || !state.username) return;
-
-    try {
-        const { error } = await supabase.from('presence').upsert(
-            {
-                peer_id: state.peerId,
-                room_id: state.roomId,
-                username: state.username,
-                updated_at: new Date().toISOString()
-            },
-            { onConflict: 'peer_id,room_id' }
-        );
-
-        if (error) {
-            // Игнорируем ошибки, если канал сигнализации работает
-            if (state.channel?.state() === 'joined') {
-                console.debug('Presence error (игнорируется):', error.message);
-            } else {
-                console.warn('Presence error:', error.message);
-            }
-            return; 
-        }
-        
-        findPeers();
-        
-    } catch (error) {
-        // Полное игнорирование сетевых ошибок здесь
-        console.debug('Сетевая задержка presence (игнорируется)');
-    }
+    // Игнорируем ошибки полностью, чтобы не ломать логику при временных сбоях сети
+    await supabase.from('presence').upsert(
+        {
+            peer_id: state.peerId,
+            room_id: state.roomId,
+            username: state.username,
+            updated_at: new Date().toISOString()
+        },
+        { onConflict: 'peer_id,room_id' }
+    ).then(({ error }) => {
+        if (error) console.debug('Фоновая ошибка presence:', error.message);
+        else findPeers();
+    });
 }
 
 async function findPeers() {
-    const tenSecondsAgo = new Date(Date.now() - 10000).toISOString();
-    
     const { data, error } = await supabase
         .from('presence')
         .select('peer_id, username')
         .eq('room_id', state.roomId)
         .neq('peer_id', state.peerId)
-        .gt('updated_at', tenSecondsAgo);
+        .gt('updated_at', new Date(Date.now() - 15000).toISOString());
 
     if (error) return;
 
@@ -358,47 +348,28 @@ function addLocalVideo() {
 }
 
 function createPeerConnection(peerId, isInitiator) {
-    const config = {
-        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-    };
-
+    const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
     const conn = new RTCPeerConnection(config);
     
     if (state.localStream) {
-        state.localStream.getTracks().forEach(track => {
-            conn.addTrack(track, state.localStream);
-        });
+        state.localStream.getTracks().forEach(track => conn.addTrack(track, state.localStream));
     }
 
-    conn.ontrack = (event) => {
-        addRemoteVideo(peerId, event.streams[0]);
-    };
+    conn.ontrack = (event) => addRemoteVideo(peerId, event.streams[0]);
 
     conn.onicecandidate = (event) => {
         if (event.candidate) {
-            sendSignal({
-                type: 'ice-candidate',
-                target: peerId,
-                candidate: event.candidate,
-                room: state.roomId
-            });
+            sendSignal({ type: 'ice-candidate', target: peerId, candidate: event.candidate, room: state.roomId });
         }
     };
 
     conn.onconnectionstatechange = () => {
-        if (conn.connectionState === 'connected') {
-            updateParticipantCount();
-        } else if (conn.connectionState === 'disconnected' || conn.connectionState === 'failed') {
-            removePeer(peerId);
-        }
+        if (conn.connectionState === 'connected') updateParticipantCount();
+        else if (conn.connectionState === 'disconnected' || conn.connectionState === 'failed') removePeer(peerId);
     };
 
     state.peers.set(peerId, { conn });
-
-    if (isInitiator) {
-        createOffer(peerId);
-    }
-
+    if (isInitiator) createOffer(peerId);
     return conn;
 }
 
@@ -406,15 +377,8 @@ async function createOffer(peerId) {
     const conn = state.peers.get(peerId).conn;
     const offer = await conn.createOffer();
     await conn.setLocalDescription(offer);
-
-    setTimeout(async () => {
-        sendSignal({
-            type: 'offer',
-            target: peerId,
-            offer: conn.localDescription,
-            sender: state.peerId,
-            room: state.roomId
-        });
+    setTimeout(() => {
+        sendSignal({ type: 'offer', target: peerId, offer: conn.localDescription, sender: state.peerId, room: state.roomId });
     }, 500);
 }
 
@@ -425,63 +389,43 @@ async function handleOffer(payload) {
         peerData = { conn };
         state.peers.set(payload.sender, peerData);
     }
-
     const conn = peerData.conn;
     await conn.setRemoteDescription(new RTCSessionDescription(payload.offer));
-    
     const answer = await conn.createAnswer();
     await conn.setLocalDescription(answer);
-
-    setTimeout(async () => {
-        sendSignal({
-            type: 'answer',
-            target: payload.sender,
-            answer: conn.localDescription,
-            room: state.roomId
-        });
+    setTimeout(() => {
+        sendSignal({ type: 'answer', target: payload.sender, answer: conn.localDescription, room: state.roomId });
     }, 500);
 }
 
 async function handleAnswer(payload) {
     const conn = state.peers.get(payload.sender)?.conn;
-    if (conn) {
-        await conn.setRemoteDescription(new RTCSessionDescription(payload.answer));
-    }
+    if (conn) await conn.setRemoteDescription(new RTCSessionDescription(payload.answer));
 }
 
 async function handleIceCandidate(payload) {
     const conn = state.peers.get(payload.sender)?.conn;
-    if (conn) {
-        try {
-            if (payload.candidate) {
-                await conn.addIceCandidate(new RTCIceCandidate(payload.candidate));
-            }
-        } catch (e) {
-            console.error('Ошибка кандидата:', e);
-        }
+    if (conn && payload.candidate) {
+        try { await conn.addIceCandidate(new RTCIceCandidate(payload.candidate)); } 
+        catch (e) { console.error('Ошибка кандидата:', e); }
     }
 }
 
 function addRemoteVideo(peerId, stream) {
     if (document.getElementById(`video-${peerId}`)) return;
-
     const container = document.createElement('div');
     container.className = 'video-container';
     container.id = `video-${peerId}`;
-
     const video = document.createElement('video');
     video.srcObject = stream;
     video.autoplay = true;
     video.playsInline = true;
-
     const label = document.createElement('div');
     label.className = 'video-label';
     label.textContent = 'Участник';
-
     container.appendChild(video);
     container.appendChild(label);
     elements.videoGrid.appendChild(container);
-    
     updateParticipantCount();
 }
 
@@ -490,87 +434,73 @@ function removePeer(peerId) {
     if (peerData) {
         peerData.conn.close();
         state.peers.delete(peerId);
-        
         const videoEl = document.getElementById(`video-${peerId}`);
         if (videoEl) videoEl.remove();
-        
         updateParticipantCount();
     }
 }
 
 function updateParticipantCount() {
-    const count = state.peers.size + 1;
-    elements.participantsNumber.textContent = count;
+    elements.participantsNumber.textContent = state.peers.size + 1;
     elements.participantsCount.classList.add('active');
 }
 
 function sendSignal(data) {
-    if (!state.channel) return;
-    
-    const result = state.channel.send({
-        type: 'broadcast',
-        event: data.type,
-        payload: data
-    });
-    
-    // Опционально можно обработать ошибку отправки, но обычно это шум
-    // result.then(...).catch(...)
+    if (state.channel) {
+        state.channel.send({ type: 'broadcast', event: data.type, payload: data });
+    }
 }
 
-function sendMessage() {
+async function sendMessage() {
     const text = elements.messageInput.value.trim();
     if (!text || !state.roomId) return;
 
-    renderMessage(state.username, text, true);
+    // 1. Сохраняем в БД (гарантия доставки)
+    const { error } = await supabase.from('messages').insert({
+        room_id: state.roomId,
+        sender: state.username,
+        content: text
+    });
+
+    if (error) {
+        console.error('Ошибка сохранения сообщения:', error);
+        // Даже если БД недоступна, пробуем отправить через realtime (best effort)
+    }
+
+    // 2. Отображаем у себя
+    renderMessage(state.username, text, true, true);
     elements.messageInput.value = '';
     
-    if (state.channel) {
-        state.channel.send({
-            type: 'broadcast',
-            event: 'chat-message',
-            payload: {
-                room: state.roomId,
-                sender: state.username,
-                text: text,
-                timestamp: new Date().toISOString()
-            }
-        });
-    }
+    // 3. Отправляем событие другим (для мгновенного отображения без перезагрузки)
+    sendSignal({
+        type: 'chat-message',
+        payload: {
+            room: state.roomId,
+            sender: state.username,
+            text: text,
+            timestamp: new Date().toISOString()
+        }
+    });
 }
 
-function renderMessage(user, text, isOwn) {
+function renderMessage(user, text, isOwn, scroll = true) {
     const div = document.createElement('div');
     div.className = `message ${isOwn ? 'own' : ''}`;
-    
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    
     div.innerHTML = `
-        <div class="message-meta">
-            <span>${user}</span>
-            <span>${time}</span>
-        </div>
+        <div class="message-meta"><span>${user}</span><span>${time}</span></div>
         <div class="message-body">${escapeHtml(text)}</div>
     `;
-    
     elements.messages.appendChild(div);
-    elements.messages.scrollTop = elements.messages.scrollHeight;
+    if (scroll) elements.messages.scrollTop = elements.messages.scrollHeight;
 }
 
 function handleTyping() {
-    if (!state.roomId || !state.channel) return;
-
+    if (!state.roomId) return;
     if (!state.isTyping) {
         state.isTyping = true;
-        state.channel.send({
-            type: 'broadcast',
-            event: 'typing',
-            payload: {
-                room: state.roomId,
-                sender: state.username
-            }
-        });
+        sendSignal({ type: 'typing', payload: { room: state.roomId, sender: state.username } });
     }
-
     clearTimeout(state.typingTimeout);
     state.typingTimeout = setTimeout(() => {
         state.isTyping = false;
@@ -580,17 +510,12 @@ function handleTyping() {
 
 function showTypingIndicator(username) {
     elements.typingIndicator.textContent = `${username} печатает...`;
-    
     clearTimeout(state.typingTimeout);
-    state.typingTimeout = setTimeout(() => {
-        elements.typingIndicator.textContent = '';
-    }, 3000);
+    state.typingTimeout = setTimeout(() => { elements.typingIndicator.textContent = ''; }, 3000);
 }
 
 function handleLeave() {
-    if (confirm('Вы уверены, что хотите выйти?')) {
-        window.location.reload();
-    }
+    if (confirm('Вы уверены?')) window.location.reload();
 }
 
 function escapeHtml(text) {
@@ -599,5 +524,4 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-// Запуск
 init();
