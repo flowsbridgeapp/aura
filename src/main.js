@@ -148,26 +148,52 @@ async function handleJoin() {
 }
 
 function broadcastPresence() {
-    // Периодическая отправка "я тут" для обнаружения пиров
-    setInterval(async () => {
+    // Функция отправки данных
+    const sendPresence = async () => {
         if (!state.roomId || !state.username) return;
-        
-        const { error } = await supabase.from('presence').upsert(
-            {
-                peer_id: state.peerId,
-                room_id: state.roomId,
-                username: state.username,
-                updated_at: new Date().toISOString()
-            },
-            { 
-                onConflict: 'peer_id,room_id' // Указываем, по каким полям проверять уникальность
-            }
-        );
-        
-        if (error) console.error('Ошибка обновления presence:', error);
+
+        const payload = {
+            peer_id: state.peerId,
+            room_id: state.roomId,
+            username: state.username,
+            updated_at: new Date().toISOString()
+        };
+
+        // Сначала пробуем обновить (UPDATE)
+        const { data: updateData, error: updateError } = await supabase
+            .from('presence')
+            .update(payload)
+            .eq('peer_id', state.peerId)
+            .eq('room_id', state.roomId);
+
+        // Если обновлено 0 строк, значит записи нет -> делаем INSERT
+        if (!updateError && updateData?.length === 0) {
+             const { error: insertError } = await supabase
+                .from('presence')
+                .insert([payload]);
+             
+             if (insertError) console.error('Ошибка INSERT presence:', insertError);
+        } else if (updateError) {
+            // Если ошибка обновления, пробуем игнорировать или логировать
+            // Иногда при гонке условий UPDATE может выдать ошибку, тогда пробуем upsert через insert с игнорированием дублей (если бы поддерживалось проще)
+            // Но для простоты: если UPDATE упал с ошибкой прав доступа - это проблема политик (см Шаг 1)
+            console.error('Ошибка UPDATE presence:', updateError);
+        }
+    };
+
+    // Запускаем немедленно
+    sendPresence();
+
+    // И повторяем каждые 5 секунд
+    const intervalId = setInterval(() => {
+        if (!state.roomId) {
+            clearInterval(intervalId);
+            return;
+        }
+        sendPresence();
     }, 5000);
     
-    // Поиск существующих пиров
+    // Поиск пиров
     findPeers();
 }
 
