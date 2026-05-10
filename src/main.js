@@ -5,11 +5,18 @@ import { v4 as uuidv4 } from 'https://cdn.jsdelivr.net/npm/uuid@9/+esm';
 const SUPABASE_URL = 'https://nkgcsipcxwxhkyyvddet.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_bKnk2aDCxZnw5Bqvhgf7ow_Wyg_m1NL';
 
+
 if (SUPABASE_URL === 'YOUR_SUPABASE_URL') {
     console.warn('Предупреждение: Supabase не настроен. Замените URL и KEY в main.js');
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+    realtime: {
+        params: {
+            eventsPerSecond: 10
+        }
+    }
+});
 
 // Состояние приложения
 const state = {
@@ -27,7 +34,7 @@ const state = {
         videoEnabled: false,
         audioEnabled: false
     },
-    connectionErrors: 0
+    channel: null // Храним ссылку на канал
 };
 
 // DOM Элементы
@@ -49,8 +56,6 @@ const elements = {
     toggleChat: document.getElementById('toggle-chat'),
     chatPanel: document.getElementById('chat-panel'),
     closeChat: document.getElementById('close-chat'),
-    
-    // Новые элементы для настроек
     settingsBtn: document.getElementById('settings-btn'),
     settingsModal: document.getElementById('settings-modal'),
     closeSettings: document.getElementById('close-settings'),
@@ -72,36 +77,25 @@ async function init() {
     }
 }
 
-// Проверка доступности устройств (без запроса прав!)
+// Проверка устройств
 async function checkMediaDevices() {
     try {
         const devices = await navigator.mediaDevices.enumerateDevices();
-        
-        const videoInputs = devices.filter(d => d.kind === 'videoinput');
-        const audioInputs = devices.filter(d => d.kind === 'audioinput');
-
-        state.mediaDevices.hasVideo = videoInputs.length > 0;
-        state.mediaDevices.hasAudio = audioInputs.length > 0;
-
+        state.mediaDevices.hasVideo = devices.filter(d => d.kind === 'videoinput').length > 0;
+        state.mediaDevices.hasAudio = devices.filter(d => d.kind === 'audioinput').length > 0;
         updateSettingsUI();
     } catch (err) {
         console.warn('Не удалось перечислить устройства:', err);
-        state.mediaDevices.hasVideo = false;
-        state.mediaDevices.hasAudio = false;
         updateSettingsUI();
     }
 }
 
 function updateSettingsUI() {
-    // Обновление состояния переключателей
     elements.videoToggle.checked = state.mediaDevices.videoEnabled;
     elements.audioToggle.checked = state.mediaDevices.audioEnabled;
-
-    // Блокировка, если устройства нет
     elements.videoToggle.disabled = !state.mediaDevices.hasVideo;
     elements.audioToggle.disabled = !state.mediaDevices.hasAudio;
 
-    // Текст подсказки
     elements.videoLabel.textContent = state.mediaDevices.hasVideo 
         ? (state.mediaDevices.videoEnabled ? "Камера включена" : "Камера выключена") 
         : "Камера не найдена";
@@ -118,38 +112,28 @@ async function handleMediaToggle(type) {
     if (!hasDevice) return;
 
     if (isEnabled) {
-        // Включение
         try {
             const constraints = {
-                video: type === 'video' ? true : false,
-                audio: type === 'audio' ? true : false
+                video: type === 'video',
+                audio: type === 'audio'
             };
             
-            // Если уже есть стрим, добавляем трек, иначе создаем новый
             if (!state.localStream) {
-                state.localStream = await navigator.mediaDevices.getUserMedia({
-                    video: type === 'video',
-                    audio: type === 'audio'
-                });
+                state.localStream = await navigator.mediaDevices.getUserMedia(constraints);
                 addLocalVideo();
             } else {
                 const newStream = await navigator.mediaDevices.getUserMedia(constraints);
                 const newTrack = newStream.getTracks()[0];
                 state.localStream.addTrack(newTrack);
                 
-                // Обновляем треки в существующих соединениях
                 state.localStream.getTracks().forEach(track => {
                     state.peers.forEach(({ conn }) => {
                         const sender = conn.getSenders().find(s => s.track && s.track.kind === track.kind);
-                        if (sender) {
-                            sender.replaceTrack(track);
-                        } else {
-                            conn.addTrack(track, state.localStream);
-                        }
+                        if (sender) sender.replaceTrack(track);
+                        else conn.addTrack(track, state.localStream);
                     });
                 });
 
-                // Перерисовка локального видео если добавилось видео
                 if (type === 'video' && !document.getElementById('local-video-container')) {
                     addLocalVideo();
                 }
@@ -160,7 +144,6 @@ async function handleMediaToggle(type) {
 
         } catch (err) {
             console.error(`Ошибка включения ${type}:`, err);
-            // Откат переключателя
             if (type === 'video') {
                 elements.videoToggle.checked = false;
                 state.mediaDevices.videoEnabled = false;
@@ -168,10 +151,9 @@ async function handleMediaToggle(type) {
                 elements.audioToggle.checked = false;
                 state.mediaDevices.audioEnabled = false;
             }
-            alert(`Не удалось получить доступ к ${type === 'video' ? 'камере' : 'микрофону'}. Проверьте разрешения браузера.`);
+            alert(`Нет доступа к ${type === 'video' ? 'камере' : 'микрофону'}.`);
         }
     } else {
-        // Выключение
         if (state.localStream) {
             const kind = type === 'video' ? 'video' : 'audio';
             const tracks = state.localStream.getTracks().filter(t => t.kind === kind);
@@ -179,13 +161,9 @@ async function handleMediaToggle(type) {
             tracks.forEach(track => {
                 track.stop();
                 state.localStream.removeTrack(track);
-                
-                // Уведомляем пиры об удалении трека
                 state.peers.forEach(({ conn }) => {
                     const sender = conn.getSenders().find(s => s.track && s.track.kind === kind);
-                    if (sender) {
-                        conn.removeTrack(sender);
-                    }
+                    if (sender) conn.removeTrack(sender);
                 });
             });
 
@@ -212,29 +190,27 @@ function setupEventListeners() {
     elements.toggleChat.addEventListener('click', () => elements.chatPanel.classList.add('open'));
     elements.closeChat.addEventListener('click', () => elements.chatPanel.classList.remove('open'));
 
-    // Настройки
     elements.settingsBtn.addEventListener('click', () => {
         elements.settingsModal.classList.remove('hidden');
-        updateSettingsUI(); // Обновить статус при открытии
+        updateSettingsUI();
     });
     elements.closeSettings.addEventListener('click', () => elements.settingsModal.classList.add('hidden'));
     
     elements.videoToggle.addEventListener('change', () => handleMediaToggle('video'));
     elements.audioToggle.addEventListener('change', () => handleMediaToggle('audio'));
 
-    subscribeToChannel();
+    // Подписка создается только после входа в комнату
 }
 
 function subscribeToChannel() {
-    // Закрываем старый канал, если он был (защита от дублей при перезапуске)
-    if (window.signalingChannel) {
-        supabase.removeChannel(window.signalingChannel);
+    // Если канал уже есть, закрываем его перед созданием нового
+    if (state.channel) {
+        supabase.removeChannel(state.channel);
     }
 
-    const channel = supabase.channel('public:signaling');
-    window.signalingChannel = channel; // Сохраняем ссылку глобально для очистки
+    state.channel = supabase.channel('public:signaling');
 
-    channel
+    state.channel
         .on('broadcast', { event: 'offer' }, async ({ payload }) => {
             if (payload.target !== state.peerId || payload.room !== state.roomId) return;
             await handleOffer(payload);
@@ -255,15 +231,19 @@ function subscribeToChannel() {
             if (payload.room !== state.roomId) return;
             renderMessage(payload.sender, payload.text, false);
         })
-        .subscribe((status) => {
+        .subscribe((status, err) => {
             if (status === 'SUBSCRIBED') {
                 elements.statusText.textContent = 'Онлайн';
                 elements.statusText.style.color = 'var(--success)';
-                state.connectionErrors = 0; // Сброс ошибок при успешной подписке
+                console.log('Канал сигнализации активен');
             } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-                console.warn('Проблема с каналом сигнализации. Пробуем переподключиться...');
+                console.warn('Проблема с соединением Supabase. Попытка восстановления...');
                 elements.statusText.textContent = 'Переподключение...';
-                elements.statusText.style.color = 'var(--danger)';
+                elements.statusText.style.color = 'var(--accent)';
+                // Библиотека сама попытается переподключиться, нам нужно просто ждать
+            } else if (status === 'CLOSED') {
+                 elements.statusText.textContent = 'Отключено';
+                 elements.statusText.style.color = 'var(--danger)';
             }
         });
 }
@@ -287,15 +267,18 @@ async function handleJoin() {
     elements.loginModal.classList.add('hidden');
     
     updateParticipantCount();
+    
+    // Сначала подписываемся на канал, потом запускаем фондовые задачи
+    subscribeToChannel();
     startPresenceLoop();
 }
 
 function startPresenceLoop() {
     if (state.presenceInterval) clearInterval(state.presenceInterval);
     
-    sendPresence(); // Первый вызов сразу
+    sendPresence(); 
 
-    // Увеличиваем интервал до 30 секунд для стабильности
+    // Увеличенный интервал для стабильности
     state.presenceInterval = setInterval(() => {
         sendPresence();
     }, 30000); 
@@ -305,7 +288,6 @@ async function sendPresence() {
     if (!state.roomId || !state.username) return;
 
     try {
-        // Пытаемся обновить запись
         const { error } = await supabase.from('presence').upsert(
             {
                 peer_id: state.peerId,
@@ -317,19 +299,20 @@ async function sendPresence() {
         );
 
         if (error) {
-            // Логируем, но НЕ прерываем работу и НЕ увеличиваем счетчик критических ошибок
-            // Ошибка 400 или сетевая ошибка здесь не должна ломать чат
-            console.debug('Фоновая ошибка presence (игнорируется):', error.message);
+            // Игнорируем ошибки, если канал сигнализации работает
+            if (state.channel?.state() === 'joined') {
+                console.debug('Presence error (игнорируется):', error.message);
+            } else {
+                console.warn('Presence error:', error.message);
+            }
             return; 
         }
         
-        // Если успех - можно найти новых пиров
         findPeers();
         
     } catch (error) {
-        // Ловим сетевые ошибки (ERR_CONNECTION_RESET и т.д.)
-        console.debug('Сетевая задержка при обновлении статуса (игнорируется)');
-        // Намеренно ничего не делаем, цикл продолжится через 30 сек
+        // Полное игнорирование сетевых ошибок здесь
+        console.debug('Сетевая задержка presence (игнорируется)');
     }
 }
 
@@ -353,8 +336,7 @@ async function findPeers() {
 }
 
 function addLocalVideo() {
-    if (document.getElementById('local-video-container')) return;
-    if (!state.localStream) return;
+    if (document.getElementById('local-video-container') || !state.localStream) return;
 
     const container = document.createElement('div');
     container.className = 'video-container';
@@ -382,7 +364,6 @@ function createPeerConnection(peerId, isInitiator) {
 
     const conn = new RTCPeerConnection(config);
     
-    // Добавляем текущие треки
     if (state.localStream) {
         state.localStream.getTracks().forEach(track => {
             conn.addTrack(track, state.localStream);
@@ -524,19 +505,16 @@ function updateParticipantCount() {
 }
 
 function sendSignal(data) {
-    const channel = supabase.channel('public:signaling');
-    // Используем явную отправку через httpSend для надежности
-    channel.send({
+    if (!state.channel) return;
+    
+    const result = state.channel.send({
         type: 'broadcast',
         event: data.type,
         payload: data
-    }).then(({ status }) => {
-        if (status === 'timed_out' || status === 'error') {
-            console.warn('Не удалось отправить сигнал через Realtime, пробуем альтернативу...');
-            // Фоллбэк можно реализовать здесь, если потребуется, 
-            // но обычно повторная отправка или переподключение канала помогает
-        }
     });
+    
+    // Опционально можно обработать ошибку отправки, но обычно это шум
+    // result.then(...).catch(...)
 }
 
 function sendMessage() {
@@ -546,16 +524,18 @@ function sendMessage() {
     renderMessage(state.username, text, true);
     elements.messageInput.value = '';
     
-    supabase.channel(`public:signaling`).send({
-        type: 'broadcast',
-        event: 'chat-message',
-        payload: {
-            room: state.roomId,
-            sender: state.username,
-            text: text,
-            timestamp: new Date().toISOString()
-        }
-    });
+    if (state.channel) {
+        state.channel.send({
+            type: 'broadcast',
+            event: 'chat-message',
+            payload: {
+                room: state.roomId,
+                sender: state.username,
+                text: text,
+                timestamp: new Date().toISOString()
+            }
+        });
+    }
 }
 
 function renderMessage(user, text, isOwn) {
@@ -577,11 +557,11 @@ function renderMessage(user, text, isOwn) {
 }
 
 function handleTyping() {
-    if (!state.roomId) return;
+    if (!state.roomId || !state.channel) return;
 
     if (!state.isTyping) {
         state.isTyping = true;
-        supabase.channel(`public:signaling`).send({
+        state.channel.send({
             type: 'broadcast',
             event: 'typing',
             payload: {
