@@ -27,7 +27,8 @@ const state = {
     isTyping: false,
     typingTimeout: null,
     mediaDevices: { hasVideo: false, hasAudio: false, videoEnabled: false, audioEnabled: false },
-    channelJoined: false // Флаг готовности канала
+    channelJoined: false,
+    onlineUsers: new Set() // Отслеживание пользователей через Realtime Presence
 };
 
 // DOM
@@ -211,7 +212,14 @@ function connectToChannel() {
         supabase.removeChannel(signalingChannel);
     }
 
-    signalingChannel = supabase.channel(`public:signaling-${state.roomId}`);
+    // Используем канал с включенным Presence
+    signalingChannel = supabase.channel(`public:signaling-${state.roomId}`, {
+        config: {
+            presence: {
+                key: state.peerId
+            }
+        }
+    });
 
     signalingChannel
         .on('broadcast', { event: 'offer' }, async ({ payload }) => {
@@ -231,21 +239,55 @@ function connectToChannel() {
             showTypingIndicator(payload.sender);
         })
         .on('broadcast', { event: 'chat-message' }, ({ payload }) => {
-            // Игнорируем свои сообщения из канала (они уже добавлены локально)
             if (payload.sender === state.username) return; 
             renderMessage(payload.sender, payload.text, false, payload.timestamp);
         })
-        .subscribe(status => {
+        // Обработка событий Presence (онлайн/офлайн пользователи)
+        .on('presence', { event: 'sync' }, () => {
+            const newState = signalingChannel.presenceState();
+            state.onlineUsers.clear();
+            
+            // Подсчитываем уникальных пользователей
+            Object.keys(newState).forEach(key => {
+                const users = newState[key];
+                if (users && users.length > 0) {
+                    users.forEach(u => {
+                        if (u.username) state.onlineUsers.add(u.username);
+                    });
+                }
+            });
+            
+            updateParticipantCount();
+        })
+        .on('presence', { event: 'join' }, ({ key, newPresences }) => {
+            newPresences.forEach(p => {
+                if (p.username) state.onlineUsers.add(p.username);
+            });
+            updateParticipantCount();
+        })
+        .on('presence', { event: 'leave' }, ({ key, leftPresences }) => {
+            leftPresences.forEach(p => {
+                if (p.username) state.onlineUsers.delete(p.username);
+            });
+            updateParticipantCount();
+        })
+        .subscribe(async status => {
             if (status === 'SUBSCRIBED') {
                 state.channelJoined = true;
                 elements.statusText.textContent = 'Онлайн';
                 elements.statusText.style.color = 'var(--success)';
-                updateParticipantCount(); // Просто обновим счетчик (1 человек)
+                
+                // Отправляем своё присутствие
+                await signalingChannel.track({
+                    username: state.username,
+                    peerId: state.peerId
+                });
+                
+                updateParticipantCount();
             } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
                 elements.statusText.textContent = 'Ошибка соединения';
                 elements.statusText.style.color = 'var(--danger)';
                 state.channelJoined = false;
-                // Пробуем переподключиться через 5 сек
                 setTimeout(connectToChannel, 5000);
             }
         });
@@ -473,7 +515,8 @@ function removePeer(peerId) {
 }
 
 function updateParticipantCount() {
-    const count = state.peers.size + 1;
+    // Считаем количество уникальных пользователей через Presence + 1 (себя, если еще не в списке)
+    const count = state.onlineUsers.size > 0 ? state.onlineUsers.size : state.peers.size + 1;
     elements.participantsNumber.textContent = count;
     elements.participantsCount.classList.add('active');
 }
