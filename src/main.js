@@ -20,7 +20,6 @@ const state = {
     peers: new Map(),
     isTyping: false,
     typingTimeout: null,
-    presenceInterval: null,
     mediaDevices: {
         hasVideo: false,
         hasAudio: false,
@@ -30,8 +29,13 @@ const state = {
     signalingChannel: null,
     unreadCount: 0,
     isChatViewActive: true,
-    messageQueue: [], // Очередь для сообщений, если канал еще не готов
-    isChannelReady: false
+    
+    // Улучшенное состояние канала
+    isChannelReady: false,
+    channelStatus: 'disconnected', // disconnected, connecting, connected, error
+    messageQueue: [], // Очередь исходящих сообщений
+    reconnectAttempts: 0,
+    maxReconnectAttempts: 5
 };
 
 // DOM Элементы
@@ -61,8 +65,7 @@ const elements = {
     audioLabel: document.getElementById('audio-label'),
     
     // Навигация
-    chatBadge: document.getElementById('chat-badge'),
-    navItems: document.querySelectorAll('.nav-item')
+    chatBadge: document.getElementById('chat-badge')
 };
 
 // Инициализация
@@ -76,7 +79,7 @@ async function init() {
         elements.roomIdInput.value = roomParam;
     }
     
-    console.log('🚀 Aura Messenger запущен. Ожидание входа...');
+    console.log('🚀 Aura Messenger запущен. Версия: Stable-Queue');
 }
 
 // Проверка устройств
@@ -214,19 +217,37 @@ function setupEventListeners() {
         }
     });
 
-    // Подключаемся к каналу сразу при старте скрипта, но логика активируется после входа
+    // Первичное подключение
     subscribeToChannel();
 }
 
+function updateConnectionStatus(status, text) {
+    state.channelStatus = status;
+    elements.statusText.textContent = text;
+    
+    if (status === 'connected') {
+        elements.statusText.style.color = 'var(--success)';
+    } else if (status === 'error' || status === 'disconnected') {
+        elements.statusText.style.color = 'var(--danger)';
+    } else {
+        elements.statusText.style.color = 'var(--text-secondary)';
+    }
+}
+
 function subscribeToChannel() {
+    // Если уже есть канал, закрываем его перед созданием нового
     if (state.signalingChannel) {
         supabase.removeChannel(state.signalingChannel);
+        state.signalingChannel = null;
     }
 
-    // Имя канала должно быть одинаковым для всех!
+    updateConnectionStatus('connecting', 'Подключение...');
+    console.log('📡 Попытка подключения к каналу...');
+
     state.signalingChannel = supabase.channel('public:signaling');
     const channel = state.signalingChannel;
 
+    // Presence
     channel.on('presence', { event: 'sync' }, () => {
         const onlineUsers = channel.presenceState();
         const count = Object.keys(onlineUsers).length;
@@ -234,6 +255,7 @@ function subscribeToChannel() {
         elements.participantsCount.classList.add('active');
     });
 
+    // Обработчики событий
     channel
         .on('broadcast', { event: 'offer' }, async ({ payload }) => {
             if (payload.target !== state.peerId || payload.room !== state.roomId) return;
@@ -252,17 +274,10 @@ function subscribeToChannel() {
             showTypingIndicator(payload.sender);
         })
         .on('broadcast', { event: 'chat-message' }, ({ payload }) => {
-            // ЛОГ ПОЛУЧЕНИЯ
-            console.log('📩 Получено сообщение из сети:', payload);
-
-            if (payload.room_id !== state.roomId) {
-                console.log('⚠️ Отклонено: не та комната');
-                return;
-            }
-            if (payload.sender === state.username) {
-                console.log('⚠️ Отклонено: свое сообщение');
-                return; 
-            }
+            console.log('📩 Входящее сообщение:', payload.content);
+            
+            if (payload.room_id !== state.roomId) return;
+            if (payload.sender === state.username) return; 
             
             renderMessage(payload.sender, payload.content, false);
             
@@ -272,29 +287,49 @@ function subscribeToChannel() {
             }
         })
         .subscribe(async (status) => {
-            console.log('📡 Статус канала сигнализации:', status);
+            console.log('📡 Статус подписки:', status);
             
             if (status === 'SUBSCRIBED') {
                 state.isChannelReady = true;
-                elements.statusText.textContent = 'Онлайн (БД откл)';
-                elements.statusText.style.color = 'var(--success)';
-                channel.track({ user: state.username, id: state.peerId });
+                state.reconnectAttempts = 0;
+                updateConnectionStatus('connected', 'Онлайн');
                 
-                // Отправляем накопленные сообщения из очереди
+                // Отправка очереди
                 if (state.messageQueue.length > 0) {
                     console.log(`🚀 Отправка ${state.messageQueue.length} сообщений из очереди`);
-                    state.messageQueue.forEach(msg => sendRawMessage(msg));
-                    state.messageQueue = [];
+                    // Небольшая задержка для стабильности
+                    setTimeout(() => {
+                        state.messageQueue.forEach(msg => sendRawMessage(msg));
+                        state.messageQueue = [];
+                    }, 500);
                 }
             } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
                 state.isChannelReady = false;
-                elements.statusText.textContent = 'Переподключение...';
-                elements.statusText.style.color = 'var(--danger)';
+                updateConnectionStatus('error', 'Сбой связи');
+                handleReconnect();
             }
         });
 }
 
-// Вспомогательная функция прямой отправки
+function handleReconnect() {
+    if (state.reconnectAttempts >= state.maxReconnectAttempts) {
+        console.error('❌ Превышено количество попыток переподключения');
+        updateConnectionStatus('error', 'Нет связи');
+        return;
+    }
+
+    state.reconnectAttempts++;
+    const delay = Math.min(1000 * Math.pow(2, state.reconnectAttempts), 10000); // Экспоненциальная задержка
+    
+    console.log(`⏳ Переподключение через ${delay}мс (попытка ${state.reconnectAttempts})`);
+    
+    setTimeout(() => {
+        if (state.roomId) { // Переподключаем только если пользователь в комнате
+            subscribeToChannel();
+        }
+    }, delay);
+}
+
 function sendRawMessage(payload) {
     if (!state.signalingChannel) return;
     
@@ -304,9 +339,18 @@ function sendRawMessage(payload) {
         payload: payload
     }).then(status => {
         if (status === 'ok') {
-            console.log('✅ Сообщение успешно отправлено в сеть');
+            console.log('✅ Сообщение доставлено:', payload.content);
         } else {
-            console.warn('⚠️ Сообщение не ушло (статус):', status);
+            console.warn('⚠️ Статус отправки:', status);
+            // Если ошибка, возвращаем в очередь
+            if (!state.messageQueue.includes(payload)) {
+                state.messageQueue.push(payload);
+            }
+        }
+    }).catch(err => {
+        console.error('Ошибка сети при отправке:', err);
+        if (!state.messageQueue.includes(payload)) {
+            state.messageQueue.push(payload);
         }
     });
 }
@@ -345,7 +389,7 @@ async function sendMessage() {
     const text = elements.messageInput.value.trim();
     if (!text || !state.roomId || !state.username) return;
 
-    // 1. Мгновенно рисуем у себя
+    // Рисуем у себя мгновенно
     renderMessage(state.username, text, true);
     elements.messageInput.value = '';
 
@@ -356,18 +400,14 @@ async function sendMessage() {
         created_at: new Date().toISOString()
     };
 
-    // ЛОГ ОТПРАВКИ
-    console.log('📤 Попытка отправки сообщения:', messagePayload);
-    console.log('📡 Статус канала:', state.isChannelReady ? 'ГОТОВ' : 'НЕ ГОТОВ');
-
-    if (state.isChannelReady && state.signalingChannel) {
+    if (state.isChannelReady) {
         sendRawMessage(messagePayload);
     } else {
-        console.warn('⏳ Канал не готов. Сообщение добавлено в очередь.');
+        console.warn('⏳ Канал недоступен. Сообщение в очереди.');
         state.messageQueue.push(messagePayload);
-        // Пробуем переподключить если долго нет связи
-        if (!state.signalingChannel) {
-            subscribeToChannel();
+        // Пробуем форсировать переподключение если канал мертв
+        if (state.channelStatus !== 'connecting') {
+            handleReconnect();
         }
     }
 
