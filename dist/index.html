@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aura P2P Messenger</title>
+    <link rel="manifest" href="./assets/manifest-YDG3ShOr.json">
+    <meta name="theme-color" content="#4a90e2">
+    <!-- Исправленная строка ниже -->
+  <script type="module" crossorigin src="./assets/main-F35IqUYf.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/main-BJCXrAx-.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🌌 Aura Messenger</h1>
+            <div class="user-settings">
+                <input type="text" id="username" placeholder="Ваше имя" maxlength="20">
+                <span id="connection-status" class="status disconnected">Отключено</span>
+            </div>
+            <div class="peer-count" id="peer-count">
+                <span class="peer-icon">👥</span>
+                <span class="peer-number">0</span> участников
+            </div>
+        </header>
+
+        <main>
+            <div id="video-grid" class="video-grid"></div>
+            
+            <div class="chat-container">
+                <div id="messages" class="messages"></div>
+                <div class="input-area">
+                    <input type="file" id="file-input" hidden>
+                    <button id="attach-btn" title="Прикрепить файл">📎</button>
+                    <input type="text" id="message-input" placeholder="Введите сообщение..." autocomplete="off">
+                    <button id="send-btn">➤</button>
+                </div>
+                <div id="typing-indicator" class="typing-indicator"></div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Подключаем как модуль для работы с import/export -->
+    
+    <script>
+        // Регистрация Service Worker
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js')
+                    .then(reg => console.log('SW registered:', reg.scope))
+                    .catch(err => console.error('SW registration failed:', err));
+            });
+        }
+    </script>
+</body>
+</html>
