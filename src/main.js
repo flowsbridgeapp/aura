@@ -5,10 +5,13 @@ import { v4 as uuidv4 } from 'https://cdn.jsdelivr.net/npm/uuid@9/+esm';
 const SUPABASE_URL = 'https://nkgcsipcxwxhkyyvddet.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_bKnk2aDCxZnw5Bqvhgf7ow_Wyg_m1NL';
 
-// Создаем клиент только для Realtime (REST функции отключены в логике)
+if (SUPABASE_URL === 'YOUR_SUPABASE_URL') {
+    console.warn('Предупреждение: Supabase не настроен.');
+}
+
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// Состояние приложения
+// Состояние
 const state = {
     username: '',
     roomId: null,
@@ -17,16 +20,12 @@ const state = {
     peers: new Map(),
     isTyping: false,
     typingTimeout: null,
-    mediaDevices: {
-        hasVideo: false,
-        hasAudio: false,
-        videoEnabled: false,
-        audioEnabled: false
-    },
+    mediaDevices: { hasVideo: false, hasAudio: false, videoEnabled: false, audioEnabled: false },
     signalingChannel: null,
     unreadCount: 0,
-    isChatViewActive: true
-    // presenceInterval удален
+    isChatViewActive: true,
+    isChannelReady: false, // Флаг готовности канала
+    messageQueue: []       // Очередь сообщений
 };
 
 // DOM Элементы
@@ -46,25 +45,20 @@ const elements = {
     participantsCount: document.getElementById('participants-count'),
     participantsNumber: document.querySelector('#participants-count span'),
     typingIndicator: document.getElementById('typing-indicator'),
-    
     settingsBtn: document.getElementById('settings-btn'),
     closeSettings: document.getElementById('close-settings'),
     videoToggle: document.getElementById('video-toggle'),
     audioToggle: document.getElementById('audio-toggle'),
     videoLabel: document.getElementById('video-label'),
     audioLabel: document.getElementById('audio-label'),
-    
-    chatBadge: document.getElementById('chat-badge'),
-    navItems: document.querySelectorAll('.nav-item')
+    chatBadge: document.getElementById('chat-badge')
 };
 
 async function init() {
     setupEventListeners();
     await checkMediaDevices();
-    
     const urlParams = new URLSearchParams(window.location.search);
-    const roomParam = urlParams.get('room');
-    if (roomParam) elements.roomIdInput.value = roomParam;
+    if (urlParams.get('room')) elements.roomIdInput.value = urlParams.get('room');
 }
 
 async function checkMediaDevices() {
@@ -74,7 +68,8 @@ async function checkMediaDevices() {
         state.mediaDevices.hasAudio = devices.filter(d => d.kind === 'audioinput').length > 0;
         updateSettingsUI();
     } catch (err) {
-        console.warn('Устройства не найдены:', err);
+        state.mediaDevices.hasVideo = false;
+        state.mediaDevices.hasAudio = false;
         updateSettingsUI();
     }
 }
@@ -82,14 +77,10 @@ async function checkMediaDevices() {
 function updateSettingsUI() {
     updateToggleState(elements.videoToggle, state.mediaDevices.videoEnabled, !state.mediaDevices.hasVideo);
     updateToggleState(elements.audioToggle, state.mediaDevices.audioEnabled, !state.mediaDevices.hasAudio);
-
     elements.videoLabel.textContent = state.mediaDevices.hasVideo 
-        ? (state.mediaDevices.videoEnabled ? "Камера включена" : "Камера выключена") 
-        : "Камера не найдена";
-        
+        ? (state.mediaDevices.videoEnabled ? "Камера вкл" : "Камера выкл") : "Камера не найдена";
     elements.audioLabel.textContent = state.mediaDevices.hasAudio 
-        ? (state.mediaDevices.audioEnabled ? "Микрофон включен" : "Микрофон выключен") 
-        : "Микрофон не найден";
+        ? (state.mediaDevices.audioEnabled ? "Микрофон вкл" : "Микрофон выкл") : "Микрофон не найден";
 }
 
 function updateToggleState(el, isChecked, isDisabled) {
@@ -127,11 +118,10 @@ async function handleMediaToggle(type) {
                 if (type === 'video' && !document.getElementById('local-video-container')) addLocalVideo();
             }
         } catch (err) {
-            console.error(`Ошибка ${type}:`, err);
             if (type === 'video') state.mediaDevices.videoEnabled = false;
             if (type === 'audio') state.mediaDevices.audioEnabled = false;
             updateSettingsUI();
-            alert(`Нет доступа к ${type === 'video' ? 'камере' : 'микрофону'}`);
+            alert(`Ошибка доступа: ${err.message}`);
         }
     } else {
         if (state.localStream) {
@@ -156,15 +146,12 @@ function setupEventListeners() {
     elements.joinBtn.addEventListener('click', handleJoin);
     elements.leaveBtn.addEventListener('click', handleLeave);
     elements.sendBtn.addEventListener('click', sendMessage);
-    
     elements.messageInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') { e.preventDefault(); sendMessage(); handleTyping(); }
         else handleTyping();
     });
-
     elements.settingsBtn.addEventListener('click', () => { elements.settingsModal.classList.remove('hidden'); updateSettingsUI(); });
     elements.closeSettings.addEventListener('click', () => elements.settingsModal.classList.add('hidden'));
-    
     elements.videoToggle.addEventListener('click', () => handleMediaToggle('video'));
     elements.audioToggle.addEventListener('click', () => handleMediaToggle('audio'));
 
@@ -182,10 +169,8 @@ function subscribeToChannel() {
     state.signalingChannel = supabase.channel('public:signaling');
     const channel = state.signalingChannel;
 
-    // Presence оставлен (он легкий и работает через WebSocket, не REST)
     channel.on('presence', { event: 'sync' }, () => {
-        const onlineUsers = channel.presenceState();
-        const count = Object.keys(onlineUsers).length;
+        const count = Object.keys(channel.presenceState()).length;
         elements.participantsNumber.textContent = count > 0 ? count : 1;
         elements.participantsCount.classList.add('active');
     });
@@ -215,22 +200,48 @@ function subscribeToChannel() {
         })
         .subscribe(async (status) => {
             if (status === 'SUBSCRIBED') {
+                state.isChannelReady = true; // КАНАЛ ГОТОВ
                 elements.statusText.textContent = 'Онлайн (БД откл)';
                 elements.statusText.style.color = 'var(--success)';
                 channel.track({ user: state.username, id: state.peerId });
-                // История НЕ загружается
+                
+                // Отправляем сообщения из очереди, если они накопились пока канал грузился
+                flushMessageQueue();
             } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-                elements.statusText.textContent = 'Сбой...';
+                state.isChannelReady = false;
+                elements.statusText.textContent = 'Сбой сети';
                 elements.statusText.style.color = 'var(--danger)';
             }
         });
+}
+
+// Отправка сообщений из очереди
+function flushMessageQueue() {
+    if (state.messageQueue.length === 0) return;
+    console.log(`Отправка ${state.messageQueue.length} сообщений из очереди...`);
+    
+    // Используем setTimeout, чтобы не блокировать UI
+    setTimeout(() => {
+        state.messageQueue.forEach(msg => {
+            if (state.signalingChannel) {
+                state.signalingChannel.send({
+                    type: 'broadcast',
+                    event: 'chat-message',
+                    payload: msg
+                });
+            }
+        });
+        state.messageQueue = [];
+    }, 100);
 }
 
 function updateChatBadge() {
     if (state.unreadCount > 0) {
         elements.chatBadge.textContent = state.unreadCount > 9 ? '9+' : state.unreadCount;
         elements.chatBadge.classList.add('visible');
-    } else { elements.chatBadge.classList.remove('visible'); }
+    } else {
+        elements.chatBadge.classList.remove('visible');
+    }
 }
 
 async function handleJoin() {
@@ -247,36 +258,41 @@ async function handleJoin() {
     state.roomId = roomId;
     elements.roomDisplay.textContent = `Room: ${roomId}`;
     elements.loginModal.classList.add('hidden');
-    
-    // startPresenceLoop() ОТКЛЮЧЕН
 }
 
-// Функция отправки БЕЗ сохранения в БД
 async function sendMessage() {
     const text = elements.messageInput.value.trim();
     if (!text || !state.roomId) return;
 
-    // 1. Мгновенный рендер у себя
+    // 1. Сразу рисуем у себя
     renderMessage(state.username, text, true);
     elements.messageInput.value = '';
 
-    const messagePayload = {
+    const payload = {
         room_id: state.roomId,
         sender: state.username,
         content: text,
         created_at: new Date().toISOString()
     };
 
-    // 2. Отправка ТОЛЬКО в Realtime канал (без await supabase.from...)
-    const channel = state.signalingChannel;
-    if (channel && channel.status === 'SUBSCRIBED') {
-        channel.send({
+    // 2. Проверяем готовность канала
+    if (state.isChannelReady && state.signalingChannel) {
+        state.signalingChannel.send({
             type: 'broadcast',
             event: 'chat-message',
-            payload: messagePayload
+            payload: payload
         });
     } else {
-        console.warn('Канал не готов');
+        // 3. Если канал не готов - кладем в очередь
+        console.warn('Канал не готов. Сообщение добавлено в очередь.');
+        state.messageQueue.push(payload);
+        
+        // Визуально показываем пользователю, что идет подключение (опционально)
+        if (elements.statusText.textContent !== 'Подключение...') {
+            const oldText = elements.statusText.textContent;
+            elements.statusText.textContent = 'Отправка...';
+            setTimeout(() => { elements.statusText.textContent = oldText; }, 2000);
+        }
     }
 
     state.isTyping = false;
@@ -323,7 +339,9 @@ async function createOffer(peerId) {
     const conn = state.peers.get(peerId).conn;
     const offer = await conn.createOffer();
     await conn.setLocalDescription(offer);
-    setTimeout(() => sendSignal({ type: 'offer', target: peerId, offer: conn.localDescription, sender: state.peerId, room: state.roomId }), 500);
+    setTimeout(async () => {
+        sendSignal({ type: 'offer', target: peerId, offer: conn.localDescription, sender: state.peerId, room: state.roomId });
+    }, 500);
 }
 
 async function handleOffer(payload) {
@@ -337,7 +355,9 @@ async function handleOffer(payload) {
     await conn.setRemoteDescription(new RTCSessionDescription(payload.offer));
     const answer = await conn.createAnswer();
     await conn.setLocalDescription(answer);
-    setTimeout(() => sendSignal({ type: 'answer', target: payload.sender, answer: conn.localDescription, room: state.roomId }), 500);
+    setTimeout(async () => {
+        sendSignal({ type: 'answer', target: payload.sender, answer: conn.localDescription, room: state.roomId });
+    }, 500);
 }
 
 async function handleAnswer(payload) {
@@ -389,7 +409,9 @@ function updateParticipantCount() {
 }
 
 function sendSignal(data) {
-    if (state.signalingChannel) state.signalingChannel.send({ type: 'broadcast', event: data.type, payload: data });
+    if (state.signalingChannel) {
+        state.signalingChannel.send({ type: 'broadcast', event: data.type, payload: data });
+    }
 }
 
 function renderMessage(user, text, isOwn) {
@@ -405,10 +427,15 @@ function handleTyping() {
     if (!state.roomId) return;
     if (!state.isTyping) {
         state.isTyping = true;
-        if (state.signalingChannel) state.signalingChannel.send({ type: 'broadcast', event: 'typing', payload: { room: state.roomId, sender: state.username } });
+        if (state.signalingChannel) {
+            state.signalingChannel.send({ type: 'broadcast', event: 'typing', payload: { room: state.roomId, sender: state.username } });
+        }
     }
     clearTimeout(state.typingTimeout);
-    state.typingTimeout = setTimeout(() => { state.isTyping = false; elements.typingIndicator.textContent = ''; }, 2000);
+    state.typingTimeout = setTimeout(() => {
+        state.isTyping = false;
+        elements.typingIndicator.textContent = '';
+    }, 2000);
 }
 
 function showTypingIndicator(username) {
@@ -417,7 +444,14 @@ function showTypingIndicator(username) {
     state.typingTimeout = setTimeout(() => { elements.typingIndicator.textContent = ''; }, 3000);
 }
 
-function handleLeave() { if (confirm('Выйти?')) window.location.reload(); }
-function escapeHtml(text) { const d = document.createElement('div'); d.textContent = text; return d.innerHTML; }
+function handleLeave() {
+    if (confirm('Выйти?')) window.location.reload();
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
 
 init();
