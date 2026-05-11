@@ -6,7 +6,7 @@ const SUPABASE_URL = 'https://nkgcsipcxwxhkyyvddet.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_bKnk2aDCxZnw5Bqvhgf7ow_Wyg_m1NL';
 
 if (SUPABASE_URL === 'YOUR_SUPABASE_URL') {
-    console.error('❌ ОШИБКА: Supabase не настроен! Замените URL и KEY в main.js');
+    console.error('❌ ОШИБКА: Supabase не настроен!');
 }
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -34,9 +34,8 @@ const state = {
     isChannelReady: false,
     channelStatus: 'disconnected',
     messageQueue: [],
-    reconnectAttempts: 0,
-    isReconnecting: false, // Флаг защиты от гонки
-    reconnectTimer: null
+    reconnectTimeout: null,
+    manualReconnectAttempts: 0
 };
 
 // DOM Элементы
@@ -57,7 +56,6 @@ const elements = {
     participantsNumber: document.querySelector('#participants-count span'),
     typingIndicator: document.getElementById('typing-indicator'),
     
-    // Настройки
     settingsBtn: document.getElementById('settings-btn'),
     closeSettings: document.getElementById('close-settings'),
     videoToggle: document.getElementById('video-toggle'),
@@ -65,7 +63,6 @@ const elements = {
     videoLabel: document.getElementById('video-label'),
     audioLabel: document.getElementById('audio-label'),
     
-    // Навигация
     chatBadge: document.getElementById('chat-badge')
 };
 
@@ -79,22 +76,16 @@ async function init() {
     if (roomParam) {
         elements.roomIdInput.value = roomParam;
     }
-    
-    console.log('🚀 Aura Messenger запущен. Версия: Stable-Reconnect-v2');
+    console.log('🚀 Aura Messenger запущен. Версия: Stable-Final');
 }
 
-// Проверка устройств
 async function checkMediaDevices() {
     try {
         const devices = await navigator.mediaDevices.enumerateDevices();
-        const videoInputs = devices.filter(d => d.kind === 'videoinput');
-        const audioInputs = devices.filter(d => d.kind === 'audioinput');
-
-        state.mediaDevices.hasVideo = videoInputs.length > 0;
-        state.mediaDevices.hasAudio = audioInputs.length > 0;
+        state.mediaDevices.hasVideo = devices.filter(d => d.kind === 'videoinput').length > 0;
+        state.mediaDevices.hasAudio = devices.filter(d => d.kind === 'audioinput').length > 0;
         updateSettingsUI();
     } catch (err) {
-        console.warn('Не удалось перечислить устройства:', err);
         state.mediaDevices.hasVideo = false;
         state.mediaDevices.hasAudio = false;
         updateSettingsUI();
@@ -104,28 +95,22 @@ async function checkMediaDevices() {
 function updateSettingsUI() {
     updateToggleState(elements.videoToggle, state.mediaDevices.videoEnabled, !state.mediaDevices.hasVideo);
     updateToggleState(elements.audioToggle, state.mediaDevices.audioEnabled, !state.mediaDevices.hasAudio);
-
     elements.videoLabel.textContent = state.mediaDevices.hasVideo 
         ? (state.mediaDevices.videoEnabled ? "Камера включена" : "Камера выключена") 
         : "Камера не найдена";
-        
     elements.audioLabel.textContent = state.mediaDevices.hasAudio 
         ? (state.mediaDevices.audioEnabled ? "Микрофон включен" : "Микрофон выключен") 
         : "Микрофон не найден";
 }
 
 function updateToggleState(el, isChecked, isDisabled) {
-    if (isChecked) el.classList.add('checked');
-    else el.classList.remove('checked');
-    
-    if (isDisabled) el.classList.add('disabled');
-    else el.classList.remove('disabled');
+    if (isChecked) el.classList.add('checked'); else el.classList.remove('checked');
+    if (isDisabled) el.classList.add('disabled'); else el.classList.remove('disabled');
 }
 
 async function handleMediaToggle(type) {
     const isActive = type === 'video' ? state.mediaDevices.videoEnabled : state.mediaDevices.audioEnabled;
     const hasDevice = type === 'video' ? state.mediaDevices.hasVideo : state.mediaDevices.hasAudio;
-
     if (!hasDevice) return;
 
     const newState = !isActive;
@@ -135,30 +120,22 @@ async function handleMediaToggle(type) {
 
     if (newState) {
         try {
-            const constraints = { video: type === 'video', audio: type === 'audio' };
-            
             if (!state.localStream) {
-                state.localStream = await navigator.mediaDevices.getUserMedia(constraints);
+                state.localStream = await navigator.mediaDevices.getUserMedia({ video: type==='video', audio: type==='audio' });
                 addLocalVideo();
             } else {
-                const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+                const newStream = await navigator.mediaDevices.getUserMedia({ video: type==='video', audio: type==='audio' });
                 const newTrack = newStream.getTracks()[0];
                 state.localStream.addTrack(newTrack);
-                
                 state.localStream.getTracks().forEach(track => {
                     state.peers.forEach(({ conn }) => {
                         const sender = conn.getSenders().find(s => s.track && s.track.kind === track.kind);
-                        if (sender) sender.replaceTrack(track);
-                        else conn.addTrack(track, state.localStream);
+                        if (sender) sender.replaceTrack(track); else conn.addTrack(track, state.localStream);
                     });
                 });
-
-                if (type === 'video' && !document.getElementById('local-video-container')) {
-                    addLocalVideo();
-                }
+                if (type === 'video' && !document.getElementById('local-video-container')) addLocalVideo();
             }
         } catch (err) {
-            console.error(`Ошибка включения ${type}:`, err);
             if (type === 'video') state.mediaDevices.videoEnabled = false;
             if (type === 'audio') state.mediaDevices.audioEnabled = false;
             updateSettingsUI();
@@ -167,9 +144,7 @@ async function handleMediaToggle(type) {
     } else {
         if (state.localStream) {
             const kind = type === 'video' ? 'video' : 'audio';
-            const tracks = state.localStream.getTracks().filter(t => t.kind === kind);
-            
-            tracks.forEach(track => {
+            state.localStream.getTracks().filter(t => t.kind === kind).forEach(track => {
                 track.stop();
                 state.localStream.removeTrack(track);
                 state.peers.forEach(({ conn }) => {
@@ -177,10 +152,9 @@ async function handleMediaToggle(type) {
                     if (sender) conn.removeTrack(sender);
                 });
             });
-
             if (type === 'video') {
-                const localContainer = document.getElementById('local-video-container');
-                if (localContainer) localContainer.remove();
+                const el = document.getElementById('local-video-container');
+                if (el) el.remove();
             }
         }
     }
@@ -192,19 +166,11 @@ function setupEventListeners() {
     elements.sendBtn.addEventListener('click', sendMessage);
     
     elements.messageInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            sendMessage();
-            handleTyping();
-        } else {
-            handleTyping();
-        }
+        if (e.key === 'Enter') { e.preventDefault(); sendMessage(); handleTyping(); } 
+        else { handleTyping(); }
     });
 
-    elements.settingsBtn.addEventListener('click', () => {
-        elements.settingsModal.classList.remove('hidden');
-        updateSettingsUI();
-    });
+    elements.settingsBtn.addEventListener('click', () => { elements.settingsModal.classList.remove('hidden'); updateSettingsUI(); });
     elements.closeSettings.addEventListener('click', () => elements.settingsModal.classList.add('hidden'));
     
     elements.videoToggle.addEventListener('click', () => handleMediaToggle('video'));
@@ -212,141 +178,120 @@ function setupEventListeners() {
 
     document.addEventListener('viewChanged', (e) => {
         state.isChatViewActive = (e.detail.viewId === 'chat-view');
-        if (state.isChatViewActive) {
-            state.unreadCount = 0;
-            updateChatBadge();
-        }
+        if (state.isChatViewActive) { state.unreadCount = 0; updateChatBadge(); }
     });
 
-    // Первичное подключение
     subscribeToChannel();
 }
 
 function updateConnectionStatus(status, text) {
     state.channelStatus = status;
     elements.statusText.textContent = text;
-    
-    if (status === 'connected') {
-        elements.statusText.style.color = 'var(--success)';
-    } else if (status === 'error' || status === 'disconnected') {
-        elements.statusText.style.color = 'var(--danger)';
-    } else {
-        elements.statusText.style.color = 'var(--text-secondary)';
-    }
-}
-
-async function safeRemoveChannel() {
-    if (state.signalingChannel) {
-        console.log('🧹 Очистка старого канала...');
-        try {
-            await supabase.removeChannel(state.signalingChannel);
-        } catch (e) {
-            console.warn('Ошибка при удалении канала:', e);
-        }
-        state.signalingChannel = null;
-        state.isChannelReady = false;
-    }
+    elements.statusText.style.color = status === 'connected' ? 'var(--success)' : 'var(--danger)';
 }
 
 function subscribeToChannel() {
-    // Защита от множественных вызовов
-    if (state.isReconnecting) {
-        console.log('⏳ Уже идет процесс переподключения, пропускаем вызов.');
-        return;
+    // Очищаем предыдущий таймер реконнекта если был
+    if (state.reconnectTimeout) clearTimeout(state.reconnectTimeout);
+
+    // Если канал уже есть и он в процессе подключения - не трогаем его
+    if (state.signalingChannel && (state.channelStatus === 'connecting' || state.channelStatus === 'connected')) {
+        return; 
     }
 
-    state.isReconnecting = true;
+    // Если канал есть но закрыт/ошибочен - удаляем его перед созданием нового
+    if (state.signalingChannel) {
+        console.log('🧹 Очистка старого канала...');
+        supabase.removeChannel(state.signalingChannel);
+        state.signalingChannel = null;
+    }
+
     updateConnectionStatus('connecting', 'Подключение...');
-    console.log('📡 Попытка подключения к каналу...');
+    console.log('📡 Создание нового канала...');
 
-    // Сначала гарантированно удаляем старый канал
-    safeRemoveChannel().then(() => {
-        state.signalingChannel = supabase.channel('public:signaling');
-        const channel = state.signalingChannel;
+    state.signalingChannel = supabase.channel('public:signaling');
+    const channel = state.signalingChannel;
 
-        // Presence
-        channel.on('presence', { event: 'sync' }, () => {
-            const onlineUsers = channel.presenceState();
-            const count = Object.keys(onlineUsers).length;
-            elements.participantsNumber.textContent = count > 0 ? count : 1;
-            elements.participantsCount.classList.add('active');
-        });
-
-        // Обработчики событий
-        channel
-            .on('broadcast', { event: 'offer' }, async ({ payload }) => {
-                if (payload.target !== state.peerId || payload.room !== state.roomId) return;
-                await handleOffer(payload);
-            })
-            .on('broadcast', { event: 'answer' }, async ({ payload }) => {
-                if (payload.target !== state.peerId) return;
-                await handleAnswer(payload);
-            })
-            .on('broadcast', { event: 'ice-candidate' }, async ({ payload }) => {
-                if (payload.target !== state.peerId) return;
-                await handleIceCandidate(payload);
-            })
-            .on('broadcast', { event: 'typing' }, ({ payload }) => {
-                if (payload.room !== state.roomId || payload.sender === state.username) return;
-                showTypingIndicator(payload.sender);
-            })
-            .on('broadcast', { event: 'chat-message' }, ({ payload }) => {
-                console.log('📩 Входящее сообщение:', payload.content);
-                
-                if (payload.room_id !== state.roomId) return;
-                if (payload.sender === state.username) return; 
-                
-                renderMessage(payload.sender, payload.content, false);
-                
-                if (!state.isChatViewActive) {
-                    state.unreadCount++;
-                    updateChatBadge();
-                }
-            })
-            .subscribe(async (status) => {
-                console.log('📡 Статус подписки:', status);
-                
-                if (status === 'SUBSCRIBED') {
-                    state.isChannelReady = true;
-                    state.isReconnecting = false;
-                    state.reconnectAttempts = 0;
-                    updateConnectionStatus('connected', 'Онлайн');
-                    
-                    // Отправка очереди
-                    if (state.messageQueue.length > 0) {
-                        console.log(`🚀 Отправка ${state.messageQueue.length} сообщений из очереди`);
-                        setTimeout(() => {
-                            state.messageQueue.forEach(msg => sendRawMessage(msg));
-                            state.messageQueue = [];
-                        }, 500);
-                    }
-                } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-                    state.isChannelReady = false;
-                    // Не сбрасываем флаг isReconnecting здесь, он сбросится в handleReconnect
-                    
-                    if (state.channelStatus !== 'error') {
-                        updateConnectionStatus('error', 'Сбой связи');
-                        handleReconnect();
-                    }
-                }
-            });
+    // Presence
+    channel.on('presence', { event: 'sync' }, () => {
+        const onlineUsers = channel.presenceState();
+        const count = Object.keys(onlineUsers).length;
+        elements.participantsNumber.textContent = count > 0 ? count : 1;
+        elements.participantsCount.classList.add('active');
     });
+
+    // Обработчики событий
+    channel
+        .on('broadcast', { event: 'offer' }, async ({ payload }) => {
+            if (payload.target !== state.peerId || payload.room !== state.roomId) return;
+            await handleOffer(payload);
+        })
+        .on('broadcast', { event: 'answer' }, async ({ payload }) => {
+            if (payload.target !== state.peerId) return;
+            await handleAnswer(payload);
+        })
+        .on('broadcast', { event: 'ice-candidate' }, async ({ payload }) => {
+            if (payload.target !== state.peerId) return;
+            await handleIceCandidate(payload);
+        })
+        .on('broadcast', { event: 'typing' }, ({ payload }) => {
+            if (payload.room !== state.roomId || payload.sender === state.username) return;
+            showTypingIndicator(payload.sender);
+        })
+        .on('broadcast', { event: 'chat-message' }, ({ payload }) => {
+            if (payload.room_id !== state.roomId) return;
+            if (payload.sender === state.username) return; 
+            
+            renderMessage(payload.sender, payload.content, false);
+            if (!state.isChatViewActive) { state.unreadCount++; updateChatBadge(); }
+        })
+        .subscribe(async (status) => {
+            console.log('📡 Статус:', status);
+            
+            if (status === 'SUBSCRIBED') {
+                state.isChannelReady = true;
+                state.manualReconnectAttempts = 0;
+                updateConnectionStatus('connected', 'Онлайн');
+                
+                if (state.messageQueue.length > 0) {
+                    console.log(`🚀 Отправка ${state.messageQueue.length} сообщений из очереди`);
+                    setTimeout(() => {
+                        state.messageQueue.forEach(msg => sendRawMessage(msg));
+                        state.messageQueue = [];
+                    }, 500);
+                }
+            } 
+            else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+                // Явная ошибка - пробуем переподключиться вручную
+                state.isChannelReady = false;
+                updateConnectionStatus('error', 'Сбой связи');
+                scheduleReconnect();
+            }
+            else if (status === 'CLOSED') {
+                // Канал закрыт. Это может быть частью нормального процесса закрытия или разрыва.
+                // Не переподключаемся сразу, даем библиотеке шанс или ждем явной ошибки.
+                // Но если мы были подключены и вдруг CLOSED без нашей команды - это подозрительно.
+                if (state.channelStatus === 'connected') {
+                     console.warn('⚠️ Неожиданное закрытие канала. Ждем авто-восстановления...');
+                     state.isChannelReady = false;
+                     updateConnectionStatus('error', 'Разрыв...');
+                     // Не вызываем scheduleReconnect сразу, даем пару секунд на авто-ребут со стороны сокета
+                }
+            }
+        });
 }
 
-function handleReconnect() {
-    if (state.reconnectTimer) clearTimeout(state.reconnectTimer);
+function scheduleReconnect() {
+    if (state.reconnectTimeout) return; // Уже запланировано
 
-    state.reconnectAttempts++;
-    // Экспоненциальная задержка: 2с, 4с, 8с, 16с, 30с, 30с...
-    const delay = Math.min(1000 * Math.pow(2, state.reconnectAttempts), 30000); 
+    state.manualReconnectAttempts++;
+    const delay = Math.min(1000 * Math.pow(2, state.manualReconnectAttempts), 15000);
     
-    console.log(`⏳ Переподключение через ${delay}мс (попытка ${state.reconnectAttempts})`);
+    console.log(`⏳ Переподключение через ${delay}мс (попытка ${state.manualReconnectAttempts})`);
     
-    state.reconnectTimer = setTimeout(() => {
-        state.isReconnecting = false; // Разрешаем новый вызов
-        if (state.roomId) {
-            subscribeToChannel();
-        }
+    state.reconnectTimeout = setTimeout(() => {
+        state.reconnectTimeout = null;
+        subscribeToChannel();
     }, delay);
 }
 
@@ -358,19 +303,14 @@ function sendRawMessage(payload) {
         event: 'chat-message',
         payload: payload
     }).then(status => {
-        if (status === 'ok') {
-            console.log('✅ Сообщение доставлено:', payload.content);
-        } else {
-            console.warn('⚠️ Статус отправки:', status);
-            if (!state.messageQueue.includes(payload)) {
-                state.messageQueue.push(payload);
-            }
+        if (status === 'ok') console.log('✅ Доставлено:', payload.content);
+        else {
+            console.warn('⚠️ Не доставлено:', status);
+            if (!state.messageQueue.includes(payload)) state.messageQueue.push(payload);
         }
     }).catch(err => {
-        console.error('Ошибка сети при отправке:', err);
-        if (!state.messageQueue.includes(payload)) {
-            state.messageQueue.push(payload);
-        }
+        console.error('Ошибка сети:', err);
+        if (!state.messageQueue.includes(payload)) state.messageQueue.push(payload);
     });
 }
 
@@ -386,11 +326,9 @@ function updateChatBadge() {
 async function handleJoin() {
     const username = elements.usernameInput.value.trim();
     let roomId = elements.roomIdInput.value.trim();
-
     if (!username) return alert('Введите имя');
 
     state.username = username;
-    
     if (!roomId) {
         roomId = uuidv4().split('-')[0];
         const newUrl = window.location.pathname + '?room=' + roomId;
@@ -400,8 +338,7 @@ async function handleJoin() {
     state.roomId = roomId;
     elements.roomDisplay.textContent = `Room: ${roomId}`;
     elements.loginModal.classList.add('hidden');
-    
-    console.log(`👤 Пользователь ${username} вошел в комнату ${roomId}`);
+    console.log(`👤 ${username} вошел в ${roomId}`);
 }
 
 async function sendMessage() {
@@ -423,9 +360,9 @@ async function sendMessage() {
     } else {
         console.warn('⏳ Канал недоступен. Сообщение в очереди.');
         state.messageQueue.push(messagePayload);
-        // Если канал мертв и нет процесса переподключения, запускаем его
-        if (!state.isReconnecting && state.channelStatus !== 'connecting') {
-            handleReconnect();
+        // Если канал явно не готов и нет таймера реконнекта - форсируем
+        if (!state.reconnectTimeout && state.channelStatus !== 'connecting') {
+            scheduleReconnect();
         }
     }
 
@@ -436,21 +373,17 @@ async function sendMessage() {
 
 function addLocalVideo() {
     if (document.getElementById('local-video-container') || !state.localStream) return;
-
     const container = document.createElement('div');
     container.className = 'video-container';
     container.id = 'local-video-container';
-    
     const video = document.createElement('video');
     video.srcObject = state.localStream;
     video.autoplay = true;
     video.muted = true;
     video.playsInline = true;
-    
     const label = document.createElement('div');
     label.className = 'video-label';
     label.textContent = `${state.username} (Вы)`;
-
     container.appendChild(video);
     container.appendChild(label);
     elements.videoGrid.appendChild(container);
@@ -459,24 +392,15 @@ function addLocalVideo() {
 function createPeerConnection(peerId, isInitiator) {
     const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
     const conn = new RTCPeerConnection(config);
-    
-    if (state.localStream) {
-        state.localStream.getTracks().forEach(track => conn.addTrack(track, state.localStream));
-    }
-
+    if (state.localStream) state.localStream.getTracks().forEach(track => conn.addTrack(track, state.localStream));
     conn.ontrack = (event) => addRemoteVideo(peerId, event.streams[0]);
-
     conn.onicecandidate = (event) => {
-        if (event.candidate) {
-            sendSignal({ type: 'ice-candidate', target: peerId, candidate: event.candidate, room: state.roomId });
-        }
+        if (event.candidate) sendSignal({ type: 'ice-candidate', target: peerId, candidate: event.candidate, room: state.roomId });
     };
-
     conn.onconnectionstatechange = () => {
         if (conn.connectionState === 'connected') updateParticipantCount();
-        else if (conn.connectionState === 'disconnected' || conn.connectionState === 'failed') removePeer(peerId);
+        else if (['disconnected', 'failed'].includes(conn.connectionState)) removePeer(peerId);
     };
-
     state.peers.set(peerId, { conn });
     if (isInitiator) createOffer(peerId);
     return conn;
@@ -578,10 +502,7 @@ function handleTyping() {
     if (!state.isTyping) {
         state.isTyping = true;
         if (state.signalingChannel) {
-            state.signalingChannel.send({
-                type: 'broadcast', event: 'typing',
-                payload: { room: state.roomId, sender: state.username }
-            });
+            state.signalingChannel.send({ type: 'broadcast', event: 'typing', payload: { room: state.roomId, sender: state.username } });
         }
     }
     clearTimeout(state.typingTimeout);
@@ -598,7 +519,7 @@ function showTypingIndicator(username) {
 }
 
 function handleLeave() {
-    if (confirm('Вы уверены, что хотите выйти?')) window.location.reload();
+    if (confirm('Вы уверены?')) window.location.reload();
 }
 
 function escapeHtml(text) {
