@@ -6,10 +6,22 @@ const SUPABASE_URL = 'https://nkgcsipcxwxhkyyvddet.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_bKnk2aDCxZnw5Bqvhgf7ow_Wyg_m1NL';
 
 if (SUPABASE_URL === 'YOUR_SUPABASE_URL') {
-    console.error('❌ ОШИБКА: Supabase не настроен!');
+    console.warn('⚠️ Supabase не настроен. Замените URL и KEY.');
 }
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// Утилиты
+function stringToColor(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
+    const c = (hash & 0x00ffffff).toString(16).toUpperCase();
+    return '#' + '00000'.substring(0, 6 - c.length) + c;
+}
+
+function getInitials(name) {
+    return name.substring(0, 2).toUpperCase();
+}
 
 // Состояние
 const state = {
@@ -20,21 +32,17 @@ const state = {
     peers: new Map(),
     isTyping: false,
     typingTimeout: null,
-    mediaDevices: {
-        hasVideo: false,
-        hasAudio: false,
-        videoEnabled: false,
-        audioEnabled: false
-    },
+    mediaDevices: { hasVideo: false, hasAudio: false, videoEnabled: false, audioEnabled: false },
     signalingChannel: null,
     unreadCount: 0,
     isChatViewActive: true,
     messageQueue: [],
     isChannelReady: false,
-    audioContext: null // Для звуковых сигналов
+    audioContext: null,
+    userColor: '' // Цвет текущего пользователя
 };
 
-// DOM Элементы
+// DOM
 const elements = {
     loginModal: document.getElementById('login-modal'),
     settingsModal: document.getElementById('settings-modal'),
@@ -51,61 +59,46 @@ const elements = {
     participantsCount: document.getElementById('participants-count'),
     participantsNumber: document.querySelector('#participants-count span'),
     typingIndicator: document.getElementById('typing-indicator'),
-    
     settingsBtn: document.getElementById('settings-btn'),
     closeSettings: document.getElementById('close-settings'),
     videoToggle: document.getElementById('video-toggle'),
     audioToggle: document.getElementById('audio-toggle'),
     videoLabel: document.getElementById('video-label'),
     audioLabel: document.getElementById('audio-label'),
-    
     chatBadge: document.getElementById('chat-badge')
 };
 
-// --- АУДИО СИСТЕМА ---
+// --- AUDIO ---
 function initAudio() {
     if (!state.audioContext) {
         const AudioContext = window.AudioContext || window.webkitAudioContext;
-        if (AudioContext) {
-            state.audioContext = new AudioContext();
-        }
+        if (AudioContext) state.audioContext = new AudioContext();
     }
-    if (state.audioContext && state.audioContext.state === 'suspended') {
-        state.audioContext.resume();
-    }
+    if (state.audioContext && state.audioContext.state === 'suspended') state.audioContext.resume();
 }
 
 function playNotificationSound() {
     if (!state.audioContext) return;
-    
-    // Мягкий "дзинь"
     const osc = state.audioContext.createOscillator();
     const gain = state.audioContext.createGain();
-    
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(523.25, state.audioContext.currentTime); // C5
+    osc.frequency.setValueAtTime(523.25, state.audioContext.currentTime);
     osc.frequency.exponentialRampToValueAtTime(880, state.audioContext.currentTime + 0.1);
-    
     gain.gain.setValueAtTime(0.1, state.audioContext.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.001, state.audioContext.currentTime + 0.3);
-    
     osc.connect(gain);
     gain.connect(state.audioContext.destination);
-    
     osc.start();
     osc.stop(state.audioContext.currentTime + 0.3);
 }
 
-// --- ИНИЦИАЛИЗАЦИЯ ---
+// --- INIT ---
 async function init() {
     setupEventListeners();
     await checkMediaDevices();
-    
     const urlParams = new URLSearchParams(window.location.search);
-    const roomParam = urlParams.get('room');
-    if (roomParam) elements.roomIdInput.value = roomParam;
-    
-    console.log('🚀 Aura Messenger v3.1 (Stable + Sound)');
+    if (urlParams.get('room')) elements.roomIdInput.value = urlParams.get('room');
+    console.log('🚀 Aura Messenger v3.2 (Secure + UX)');
 }
 
 async function checkMediaDevices() {
@@ -115,7 +108,6 @@ async function checkMediaDevices() {
         state.mediaDevices.hasAudio = devices.filter(d => d.kind === 'audioinput').length > 0;
         updateSettingsUI();
     } catch (err) {
-        console.warn('Устройства не найдены:', err);
         state.mediaDevices.hasVideo = false;
         state.mediaDevices.hasAudio = false;
         updateSettingsUI();
@@ -125,21 +117,15 @@ async function checkMediaDevices() {
 function updateSettingsUI() {
     updateToggleState(elements.videoToggle, state.mediaDevices.videoEnabled, !state.mediaDevices.hasVideo);
     updateToggleState(elements.audioToggle, state.mediaDevices.audioEnabled, !state.mediaDevices.hasAudio);
-
     elements.videoLabel.textContent = state.mediaDevices.hasVideo 
-        ? (state.mediaDevices.videoEnabled ? "Камера включена" : "Камера выключена") 
-        : "Камера не найдена";
-        
+        ? (state.mediaDevices.videoEnabled ? "Камера включена" : "Камера выключена") : "Камера не найдена";
     elements.audioLabel.textContent = state.mediaDevices.hasAudio 
-        ? (state.mediaDevices.audioEnabled ? "Микрофон включен" : "Микрофон выключен") 
-        : "Микрофон не найден";
+        ? (state.mediaDevices.audioEnabled ? "Микрофон включен" : "Микрофон выключен") : "Микрофон не найден";
 }
 
 function updateToggleState(el, isChecked, isDisabled) {
-    if (isChecked) el.classList.add('checked');
-    else el.classList.remove('checked');
-    if (isDisabled) el.classList.add('disabled');
-    else el.classList.remove('disabled');
+    if (isChecked) el.classList.add('checked'); else el.classList.remove('checked');
+    if (isDisabled) el.classList.add('disabled'); else el.classList.remove('disabled');
 }
 
 async function handleMediaToggle(type) {
@@ -165,8 +151,7 @@ async function handleMediaToggle(type) {
                 state.localStream.getTracks().forEach(track => {
                     state.peers.forEach(({ conn }) => {
                         const sender = conn.getSenders().find(s => s.track && s.track.kind === track.kind);
-                        if (sender) sender.replaceTrack(track);
-                        else conn.addTrack(track, state.localStream);
+                        if (sender) sender.replaceTrack(track); else conn.addTrack(track, state.localStream);
                     });
                 });
                 if (type === 'video' && !document.getElementById('local-video-container')) addLocalVideo();
@@ -191,8 +176,8 @@ async function handleMediaToggle(type) {
                 });
             });
             if (type === 'video') {
-                const localContainer = document.getElementById('local-video-container');
-                if (localContainer) localContainer.remove();
+                const el = document.getElementById('local-video-container');
+                if (el) el.remove();
             }
         }
     }
@@ -203,7 +188,6 @@ function setupEventListeners() {
     elements.leaveBtn.addEventListener('click', handleLeave);
     elements.sendBtn.addEventListener('click', sendMessage);
     
-    // Инициализация аудио при первом клике anywhere
     document.addEventListener('click', initAudio, { once: true });
     document.addEventListener('keydown', initAudio, { once: true });
 
@@ -214,7 +198,6 @@ function setupEventListeners() {
 
     elements.settingsBtn.addEventListener('click', () => { elements.settingsModal.classList.remove('hidden'); updateSettingsUI(); });
     elements.closeSettings.addEventListener('click', () => elements.settingsModal.classList.add('hidden'));
-    
     elements.videoToggle.addEventListener('click', () => handleMediaToggle('video'));
     elements.audioToggle.addEventListener('click', () => handleMediaToggle('audio'));
 
@@ -223,19 +206,16 @@ function setupEventListeners() {
         if (state.isChatViewActive) { state.unreadCount = 0; updateChatBadge(); }
     });
 
-    // Подключаем канал ОДИН РАЗ при старте
     subscribeToChannel();
 }
 
 function subscribeToChannel() {
-    if (state.signalingChannel) return; // Защита от дублей
-
+    if (state.signalingChannel) return;
     state.signalingChannel = supabase.channel('public:signaling');
     const channel = state.signalingChannel;
 
     channel.on('presence', { event: 'sync' }, () => {
-        const onlineUsers = channel.presenceState();
-        const count = Object.keys(onlineUsers).length;
+        const count = Object.keys(channel.presenceState()).length;
         elements.participantsNumber.textContent = count > 0 ? count : 1;
         elements.participantsCount.classList.add('active');
     });
@@ -260,25 +240,16 @@ function subscribeToChannel() {
         .on('broadcast', { event: 'chat-message' }, ({ payload }) => {
             if (payload.room_id !== state.roomId) return;
             if (payload.sender === state.username) return; 
-            
             renderMessage(payload.sender, payload.content, false);
-            playNotificationSound(); // 🔊 ЗВУК
-            
-            if (!state.isChatViewActive) {
-                state.unreadCount++;
-                updateChatBadge();
-            }
+            playNotificationSound();
+            if (!state.isChatViewActive) { state.unreadCount++; updateChatBadge(); }
         })
         .subscribe((status) => {
-            console.log('📡 Статус:', status);
-            
             if (status === 'SUBSCRIBED') {
                 state.isChannelReady = true;
                 elements.statusText.textContent = 'Онлайн';
                 elements.statusText.style.color = 'var(--success)';
                 channel.track({ user: state.username, id: state.peerId });
-                
-                // Отправка очереди
                 if (state.messageQueue.length > 0) {
                     setTimeout(() => {
                         state.messageQueue.forEach(msg => sendRawMessage(msg));
@@ -287,9 +258,8 @@ function subscribeToChannel() {
                 }
             } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
                 state.isChannelReady = false;
-                elements.statusText.textContent = 'Сбой связи...';
+                elements.statusText.textContent = 'Сбой...';
                 elements.statusText.style.color = 'var(--danger)';
-                // НЕ переподключаем вручную! Supabase сделает это сам.
             }
         });
 }
@@ -309,6 +279,8 @@ async function handleJoin() {
     if (!username) return alert('Введите имя');
 
     state.username = username;
+    state.userColor = stringToColor(username); // Генерируем цвет
+    
     if (!roomId) {
         roomId = uuidv4().split('-')[0];
         const newUrl = window.location.pathname + '?room=' + roomId;
@@ -318,17 +290,12 @@ async function handleJoin() {
     state.roomId = roomId;
     elements.roomDisplay.textContent = `Room: ${roomId}`;
     elements.loginModal.classList.add('hidden');
-    console.log(`👤 ${username} вошел в ${roomId}`);
 }
 
 function sendRawMessage(payload) {
     if (!state.signalingChannel) return;
-    state.signalingChannel.send({
-        type: 'broadcast',
-        event: 'chat-message',
-        payload: payload
-    }).then(status => {
-        if (status !== 'ok') console.warn('Статус отправки:', status);
+    state.signalingChannel.send({ type: 'broadcast', event: 'chat-message', payload }).then(s => {
+        if (s !== 'ok') console.warn('Send status:', s);
     });
 }
 
@@ -339,20 +306,18 @@ async function sendMessage() {
     renderMessage(state.username, text, true);
     elements.messageInput.value = '';
 
-    const messagePayload = {
+    const payload = {
         room_id: state.roomId,
         sender: state.username,
         content: text,
         created_at: new Date().toISOString()
     };
 
-    if (state.isChannelReady) {
-        sendRawMessage(messagePayload);
-    } else {
-        console.warn('⏳ В очереди');
-        state.messageQueue.push(messagePayload);
+    if (state.isChannelReady) sendRawMessage(payload);
+    else {
+        console.warn('⏳ Queue');
+        state.messageQueue.push(payload);
     }
-
     state.isTyping = false;
     elements.typingIndicator.textContent = '';
     elements.messageInput.focus();
@@ -365,28 +330,24 @@ function addLocalVideo() {
     container.id = 'local-video-container';
     const video = document.createElement('video');
     video.srcObject = state.localStream;
-    video.autoplay = true;
-    video.muted = true;
-    video.playsInline = true;
+    video.autoplay = true; video.muted = true; video.playsInline = true;
     const label = document.createElement('div');
     label.className = 'video-label';
     label.textContent = `${state.username} (Вы)`;
-    container.appendChild(video);
-    container.appendChild(label);
+    container.appendChild(video); container.appendChild(label);
     elements.videoGrid.appendChild(container);
 }
 
+// WebRTC Functions (PeerConnection, Offer, Answer, ICE)
 function createPeerConnection(peerId, isInitiator) {
     const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
     const conn = new RTCPeerConnection(config);
     if (state.localStream) state.localStream.getTracks().forEach(track => conn.addTrack(track, state.localStream));
-    conn.ontrack = (event) => addRemoteVideo(peerId, event.streams[0]);
-    conn.onicecandidate = (event) => {
-        if (event.candidate) sendSignal({ type: 'ice-candidate', target: peerId, candidate: event.candidate, room: state.roomId });
-    };
+    conn.ontrack = (e) => addRemoteVideo(peerId, e.streams[0]);
+    conn.onicecandidate = (e) => { if (e.candidate) sendSignal({ type: 'ice-candidate', target: peerId, candidate: e.candidate, room: state.roomId }); };
     conn.onconnectionstatechange = () => {
         if (conn.connectionState === 'connected') updateParticipantCount();
-        else if (conn.connectionState === 'disconnected' || conn.connectionState === 'failed') removePeer(peerId);
+        else if (['disconnected', 'failed'].includes(conn.connectionState)) removePeer(peerId);
     };
     state.peers.set(peerId, { conn });
     if (isInitiator) createOffer(peerId);
@@ -397,25 +358,17 @@ async function createOffer(peerId) {
     const conn = state.peers.get(peerId).conn;
     const offer = await conn.createOffer();
     await conn.setLocalDescription(offer);
-    setTimeout(async () => {
-        sendSignal({ type: 'offer', target: peerId, offer: conn.localDescription, sender: state.peerId, room: state.roomId });
-    }, 500);
+    setTimeout(() => sendSignal({ type: 'offer', target: peerId, offer: conn.localDescription, sender: state.peerId, room: state.roomId }), 500);
 }
 
 async function handleOffer(payload) {
     let peerData = state.peers.get(payload.sender);
-    if (!peerData) {
-        const conn = createPeerConnection(payload.sender, false);
-        peerData = { conn };
-        state.peers.set(payload.sender, peerData);
-    }
+    if (!peerData) { const conn = createPeerConnection(payload.sender, false); peerData = { conn }; state.peers.set(payload.sender, peerData); }
     const conn = peerData.conn;
     await conn.setRemoteDescription(new RTCSessionDescription(payload.offer));
     const answer = await conn.createAnswer();
     await conn.setLocalDescription(answer);
-    setTimeout(async () => {
-        sendSignal({ type: 'answer', target: payload.sender, answer: conn.localDescription, room: state.roomId });
-    }, 500);
+    setTimeout(() => sendSignal({ type: 'answer', target: payload.sender, answer: conn.localDescription, room: state.roomId }), 500);
 }
 
 async function handleAnswer(payload) {
@@ -425,39 +378,25 @@ async function handleAnswer(payload) {
 
 async function handleIceCandidate(payload) {
     const conn = state.peers.get(payload.sender)?.conn;
-    if (conn && payload.candidate) {
-        try { await conn.addIceCandidate(new RTCIceCandidate(payload.candidate)); } 
-        catch (e) { console.error('Ошибка кандидата:', e); }
-    }
+    if (conn && payload.candidate) try { await conn.addIceCandidate(new RTCIceCandidate(payload.candidate)); } catch(e){}
 }
 
 function addRemoteVideo(peerId, stream) {
     if (document.getElementById(`video-${peerId}`)) return;
     const container = document.createElement('div');
-    container.className = 'video-container';
-    container.id = `video-${peerId}`;
+    container.className = 'video-container'; container.id = `video-${peerId}`;
     const video = document.createElement('video');
-    video.srcObject = stream;
-    video.autoplay = true;
-    video.playsInline = true;
+    video.srcObject = stream; video.autoplay = true; video.playsInline = true;
     const label = document.createElement('div');
-    label.className = 'video-label';
-    label.textContent = 'Участник';
-    container.appendChild(video);
-    container.appendChild(label);
+    label.className = 'video-label'; label.textContent = 'Участник';
+    container.appendChild(video); container.appendChild(label);
     elements.videoGrid.appendChild(container);
     updateParticipantCount();
 }
 
 function removePeer(peerId) {
-    const peerData = state.peers.get(peerId);
-    if (peerData) {
-        peerData.conn.close();
-        state.peers.delete(peerId);
-        const videoEl = document.getElementById(`video-${peerId}`);
-        if (videoEl) videoEl.remove();
-        updateParticipantCount();
-    }
+    const p = state.peers.get(peerId);
+    if (p) { p.conn.close(); state.peers.delete(peerId); const el = document.getElementById(`video-${peerId}`); if(el) el.remove(); updateParticipantCount(); }
 }
 
 function updateParticipantCount() {
@@ -467,34 +406,44 @@ function updateParticipantCount() {
 }
 
 function sendSignal(data) {
-    if (state.signalingChannel && state.isChannelReady) {
-        state.signalingChannel.send({ type: 'broadcast', event: data.type, payload: data });
-    }
+    if (state.signalingChannel && state.isChannelReady) state.signalingChannel.send({ type: 'broadcast', event: data.type, payload: data });
 }
 
 function renderMessage(user, text, isOwn) {
+    // Очистка старых сообщений (DOM оптимизация)
+    if (elements.messages.children.length > 50) elements.messages.firstElementChild.remove();
+
     const div = document.createElement('div');
     div.className = `message ${isOwn ? 'own' : 'other'}`;
-    div.title = 'Нажмите, чтобы скопировать'; // Подсказка
-    
-    // Обработчик клика для копирования
+    div.title = 'Нажмите, чтобы скопировать';
+    div.style.animation = 'slideIn 0.3s ease-out';
+
+    // Аватарка для чужих сообщений
+    let avatarHtml = '';
+    if (!isOwn) {
+        const color = stringToColor(user);
+        avatarHtml = `<div class="message-avatar" style="background:${color}">${getInitials(user)}</div>`;
+    }
+
+    div.innerHTML = `
+        <div class="message-header" style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+            ${avatarHtml}
+            <span style="font-weight:bold; font-size:0.85rem;">${escapeHtml(user)}</span>
+        </div>
+        <div class="message-body" style="word-break:break-word;">${escapeHtml(text)}</div>
+        <div class="message-meta" style="font-size:0.7rem; opacity:0.7; margin-top:4px; text-align:right;">
+            ${new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
+        </div>
+    `;
+
     div.addEventListener('click', () => {
         navigator.clipboard.writeText(text).then(() => {
-            const originalBg = div.style.background;
-            div.style.background = 'var(--success)';
-            div.style.color = '#fff';
-            setTimeout(() => {
-                div.style.background = '';
-                div.style.color = '';
-            }, 300);
-        }).catch(err => console.error('Не удалось скопировать:', err));
+            const orig = div.style.transform;
+            div.style.transform = 'scale(0.98)';
+            setTimeout(() => div.style.transform = orig, 150);
+        });
     });
 
-    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    div.innerHTML = `
-        <div class="message-meta"><span>${user}</span><span>${time}</span></div>
-        <div class="message-body">${escapeHtml(text)}</div>
-    `;
     elements.messages.appendChild(div);
     elements.messages.scrollTop = elements.messages.scrollHeight;
 }
@@ -503,18 +452,10 @@ function handleTyping() {
     if (!state.roomId || !state.isChannelReady) return;
     if (!state.isTyping) {
         state.isTyping = true;
-        if (state.signalingChannel) {
-            state.signalingChannel.send({
-                type: 'broadcast', event: 'typing',
-                payload: { room: state.roomId, sender: state.username }
-            });
-        }
+        if (state.signalingChannel) state.signalingChannel.send({ type: 'broadcast', event: 'typing', payload: { room: state.roomId, sender: state.username } });
     }
     clearTimeout(state.typingTimeout);
-    state.typingTimeout = setTimeout(() => {
-        state.isTyping = false;
-        elements.typingIndicator.textContent = '';
-    }, 2000);
+    state.typingTimeout = setTimeout(() => { state.isTyping = false; elements.typingIndicator.textContent = ''; }, 2000);
 }
 
 function showTypingIndicator(username) {
@@ -523,14 +464,7 @@ function showTypingIndicator(username) {
     state.typingTimeout = setTimeout(() => { elements.typingIndicator.textContent = ''; }, 3000);
 }
 
-function handleLeave() {
-    if (confirm('Вы уверены, что хотите выйти?')) window.location.reload();
-}
-
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
+function handleLeave() { if (confirm('Выйти?')) window.location.reload(); }
+function escapeHtml(text) { const d = document.createElement('div'); d.textContent = text; return d.innerHTML; }
 
 init();
