@@ -2,55 +2,43 @@ import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig({
-  base: './', // Важно для GitHub Pages (относительные пути)
+  // Указываем базовый путь для GitHub Pages
+  base: '/aura/',
+  
+  build: {
+    outDir: 'dist',
+    sourcemap: true,
+  },
+
   plugins: [
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'icons/*.png'],
+      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
       manifest: {
         name: 'Aura P2P Messenger',
         short_name: 'Aura',
-        description: 'Безопасный P2P мессенджер с видео',
+        description: 'Secure P2P Video & Chat',
         theme_color: '#0f172a',
         background_color: '#0f172a',
         display: 'standalone',
+        scope: '/aura/',
+        start_url: '/aura/',
         icons: [
           {
-            src: 'icons/icon-192x192.png',
+            src: 'assets/icon-192x192.png',
             sizes: '192x192',
             type: 'image/png'
           },
           {
-            src: 'icons/icon-512x512.png',
+            src: 'assets/icon-512x512.png',
             sizes: '512x512',
             type: 'image/png'
           }
         ]
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,json}'],
-        runtimeCaching: [
-          {
-            urlPattern: /^https:\/\/cdn\.jsdelivr\.net\/.*/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'jsdelivr-cdn',
-              expiration: {
-                maxEntries: 10,
-                maxAgeSeconds: 60 * 60 * 24 * 30 // 30 дней
-              },
-              cacheableResponse: {
-                statuses: [0, 200]
-              }
-            }
-          }
-        ]
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,json}']
       }
     })
-  ],
-  build: {
-    outDir: 'dist',
-    assetsDir: 'assets',
-    sourcemap: false
-  }
+  ]
 });
