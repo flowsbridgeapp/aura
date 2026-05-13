@@ -1,12 +1,12 @@
-import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { v4 as uuidv4 } from 'https://cdn.jsdelivr.net/npm/uuid@9/+esm';
+import { createClient } from '@supabase/supabase-js';
+import { v4 as uuidv4 } from 'uuid';
 
 // КОНФИГУРАЦИЯ
-const SUPABASE_URL = 'https://nkgcsipcxwxhkyyvddet.supabase.co';
-const SUPABASE_KEY = 'sb_publishable_bKnk2aDCxZnw5Bqvhgf7ow_Wyg_m1NL';
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_KEY;
 
-if (SUPABASE_URL === 'YOUR_SUPABASE_URL') {
-    console.warn('⚠️ Supabase не настроен. Замените URL и KEY.');
+if (!SUPABASE_URL || !SUPABASE_KEY || SUPABASE_URL === 'your_supabase_url_here') {
+    console.warn('⚠️ Supabase не настроен. Создайте файл .env и укажите VITE_SUPABASE_URL и VITE_SUPABASE_KEY.');
 }
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
